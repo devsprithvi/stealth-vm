@@ -233,6 +233,27 @@ def _run_qemu(
     session.data["status"] = "running"
     session.save()
 
+    if install_iso is not None:
+        def _auto_press_cd_key():
+            time.sleep(2.0)
+            try:
+                import socket
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+                    conn.settimeout(5.0)
+                    conn.connect(str(session.qmp))
+                    f = conn.makefile("rwb")
+                    f.readline()
+                    conn.sendall(b'{"execute":"qmp_capabilities"}\n')
+                    f.readline()
+                    for _ in range(4):
+                        conn.sendall(b'{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"spc"}]}}\n')
+                        f.readline()
+                        time.sleep(0.4)
+            except Exception:
+                pass
+        import threading
+        threading.Thread(target=_auto_press_cd_key, daemon=True).start()
+
     viewer_process: Optional[subprocess.Popen] = None
     started = True
     try:
