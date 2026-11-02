@@ -40,6 +40,7 @@ apt-get install -y --no-install-recommends \
     xfce4-notifyd xfce4-screenshooter xfce4-taskmanager \
     lightdm lightdm-gtk-greeter \
     gnome-keyring libsecret-1-0 libsecret-tools \
+    pipewire-audio pipewire-pulse wireplumber alsa-utils pavucontrol xfce4-pulseaudio-plugin \
     systemd-resolved netplan.io
 
 # Keep the graphical stack and AMD microcode manual so a later autoremove
@@ -51,6 +52,7 @@ apt-mark manual \
     xfce4-notifyd xfce4-screenshooter xfce4-taskmanager \
     lightdm lightdm-gtk-greeter \
     gnome-keyring libsecret-1-0 libsecret-tools \
+    pipewire-audio pipewire-pulse wireplumber alsa-utils pavucontrol xfce4-pulseaudio-plugin \
     systemd-resolved netplan.io amd64-microcode \
     gh git >/dev/null
 

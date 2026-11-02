@@ -11,7 +11,7 @@ memory_mb = 8192
 disk_gb = 500
 
 [display]
-audio = false
+audio = true
 xres = 1920
 yres = 1080
 

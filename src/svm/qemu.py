@@ -95,7 +95,7 @@ def render_hardware_config(
     input_mode = str(profile.get("input", {}).get("mode", "ps2"))
     if input_mode not in {"ps2", "usb"}:
         raise StateError(f"unsupported input.mode '{input_mode}' (use ps2 or usb)")
-    audio = bool(display.get("audio", False))
+    audio = bool(display.get("audio", True))
     video = str(display.get("video", "qxl"))
     xres = int(display.get("xres", 1920))
     yres = int(display.get("yres", 1080))
@@ -295,6 +295,9 @@ def render_hardware_config(
     add("")
     add('[audiodev "audio0"]')
     add(f'  driver = {q("pa" if audio else "none")}')
+    if audio:
+        add('  in.mixing-engine = "on"')
+        add('  out.mixing-engine = "on"')
     add("")
 
     # Keep the generated file deterministic for easier diffing.
