@@ -97,6 +97,8 @@ def render_hardware_config(
         raise StateError(f"unsupported input.mode '{input_mode}' (use ps2 or usb)")
     audio = bool(display.get("audio", False))
     video = str(display.get("video", "qxl"))
+    xres = int(display.get("xres", 1920))
+    yres = int(display.get("yres", 1080))
     if video != "qxl":
         raise StateError(f"unsupported display.video '{video}' (only qxl is implemented)")
     mode = str(network.get("mode", "user"))
@@ -227,6 +229,8 @@ def render_hardware_config(
     add('  ram_size = "67108864"')
     add('  vram_size = "67108864"')
     add('  vgamem_mb = "64"')
+    add(f'  xres = "{xres}"')
+    add(f'  yres = "{yres}"')
     add("")
 
     # USB (ICH9 EHCI + three UHCI companions) ------------------------------
@@ -456,7 +460,11 @@ def viewer_command(cfg: Config, session: Session) -> list[str]:
             "no SPICE viewer found. Install virt-viewer or use --headless."
         )
     uri = f"spice+unix://{session.spice}"
-    return [viewer, uri]
+    cmd = [viewer]
+    if "remote-viewer" in Path(viewer).name:
+        cmd.append("--hotkeys=release-cursor=ctrl+alt")
+    cmd.append(uri)
+    return cmd
 
 
 def wait_for_socket(path: Path, timeout: float = 15.0) -> bool:

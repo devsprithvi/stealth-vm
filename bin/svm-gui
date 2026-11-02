@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 profile="${SVM_PROFILE:-linux}"
+export GDK_BACKEND="${GDK_BACKEND:-x11}"
 
 notify() {
     command -v notify-send >/dev/null 2>&1 && notify-send "Stealth VM" "$1" || true

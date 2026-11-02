@@ -22,6 +22,8 @@ disk_gb = 500
 backend = "spice"
 video = "qxl"
 audio = false
+xres = 1920
+yres = 1080
 
 [input]
 # ps2 is the default: q35 already exposes an i8042 keyboard/mouse, and it

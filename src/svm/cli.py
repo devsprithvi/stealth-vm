@@ -249,7 +249,9 @@ def _run_qemu(
                 viewer_cmd = [viewer_override, f"spice+unix://{session.spice}"]
             else:
                 viewer_cmd = viewer_command(cfg, session)
-            viewer_process = subprocess.Popen(viewer_cmd)
+            viewer_env = os.environ.copy()
+            viewer_env["GDK_BACKEND"] = "x11"
+            viewer_process = subprocess.Popen(viewer_cmd, env=viewer_env)
 
             while process.poll() is None and viewer_process.poll() is None:
                 time.sleep(0.25)
@@ -617,7 +619,9 @@ def attach(
             command = viewer_command(cfg, session)
         except StateError as exc:
             _fail(str(exc))
-    subprocess.run(command, check=False)
+    viewer_env = os.environ.copy()
+    viewer_env["GDK_BACKEND"] = "x11"
+    subprocess.run(command, check=False, env=viewer_env)
 
 
 @app.command()

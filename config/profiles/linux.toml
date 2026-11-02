@@ -20,6 +20,8 @@ disk_gb = 500
 
 [display]
 audio = false
+xres = 1920
+yres = 1080
 
 [input]
 mode = "ps2"
