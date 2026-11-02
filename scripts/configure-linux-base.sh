@@ -49,7 +49,8 @@ apt-mark manual \
     xfce4-power-manager xfce4-power-manager-plugins \
     xfce4-notifyd xfce4-screenshooter xfce4-taskmanager \
     lightdm lightdm-gtk-greeter \
-    systemd-resolved netplan.io amd64-microcode >/dev/null
+    systemd-resolved netplan.io amd64-microcode \
+    gh git >/dev/null
 
 log "Mozilla apt repository and Firefox"
 install -d -m 0755 /etc/apt/keyrings
@@ -77,6 +78,16 @@ deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://
 EOF
 apt-get update
 apt-get install -y cloudflare-warp
+
+log "GitHub CLI apt repository and client"
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+chmod 0644 /etc/apt/keyrings/githubcli-archive-keyring.gpg
+cat >/etc/apt/sources.list.d/github-cli.list <<'EOF'
+deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main
+EOF
+apt-get update
+apt-get install -y gh git
 
 log "apply available security updates"
 apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade

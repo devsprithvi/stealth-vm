@@ -58,7 +58,7 @@ PACKAGES=(
 
 # Nice-to-have; failures here do not stop the build.
 OPTIONAL=(
-    cloud-image-utils genisoimage nftables passt
+    cloud-image-utils genisoimage nftables passt gh
 )
 
 install_one() {
