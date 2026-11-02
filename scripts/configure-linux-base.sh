@@ -39,6 +39,7 @@ apt-get install -y --no-install-recommends \
     xfce4-power-manager xfce4-power-manager-plugins \
     xfce4-notifyd xfce4-screenshooter xfce4-taskmanager \
     lightdm lightdm-gtk-greeter \
+    gnome-keyring libsecret-1-0 libsecret-tools \
     systemd-resolved netplan.io
 
 # Keep the graphical stack and AMD microcode manual so a later autoremove
@@ -49,6 +50,7 @@ apt-mark manual \
     xfce4-power-manager xfce4-power-manager-plugins \
     xfce4-notifyd xfce4-screenshooter xfce4-taskmanager \
     lightdm lightdm-gtk-greeter \
+    gnome-keyring libsecret-1-0 libsecret-tools \
     systemd-resolved netplan.io amd64-microcode \
     gh git >/dev/null
 
@@ -218,7 +220,9 @@ done
 # Apply the local always-on policy, then register this overlay if needed.
 # Free WARP needs no account or password.
 warp-cli --accept-tos mdm refresh >/dev/null 2>&1 || true
-warp-cli --accept-tos registration new >/dev/null 2>&1 || true
+if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
+    warp-cli --accept-tos registration new >/dev/null 2>&1 || true
+fi
 warp-cli --accept-tos mode warp >/dev/null 2>&1 || true
 warp-cli --accept-tos connect >/dev/null 2>&1 || true
 EOF
@@ -267,8 +271,8 @@ cat >/etc/firefox/policies/policies.json <<'EOF'
     "OverrideFirstRunPage": "",
     "OverridePostUpdatePage": "",
     "NoDefaultBookmarks": true,
-    "OfferToSaveLogins": false,
-    "PasswordManagerEnabled": false,
+    "OfferToSaveLogins": true,
+    "PasswordManagerEnabled": true,
     "SearchSuggestEnabled": false,
     "FirefoxHome": {
       "Search": true,
