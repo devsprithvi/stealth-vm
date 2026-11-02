@@ -226,9 +226,9 @@ def render_hardware_config(
     add(f'  driver = {q(video + "-vga")}')
     add('  bus = "pcie.0"')
     add('  addr = "01.0"')
-    add('  ram_size = "134217728"')
-    add('  vram_size = "134217728"')
-    add('  vgamem_mb = "128"')
+    add('  ram_size = "268435456"')
+    add('  vram_size = "268435456"')
+    add('  vgamem_mb = "256"')
     add(f'  xres = "{xres}"')
     add(f'  yres = "{yres}"')
     add("")
@@ -435,7 +435,8 @@ def build_command(
         "-spice",
         f"unix=on,addr={session.spice},disable-ticketing=on,"
         "disable-copy-paste=on,disable-agent-file-xfer=on,agent-mouse=off,"
-        "image-compression=off,playback-compression=off,streaming-video=off",
+        "image-compression=off,playback-compression=off,streaming-video=filter,"
+        "max-refresh-rate=180",
     ]
 
     if tpm:
