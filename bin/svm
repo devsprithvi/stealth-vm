@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Thin wrapper so the project works without activating a virtualenv.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export SVM_ROOT="$ROOT"
+exec uv run --project "$ROOT" --quiet svm "$@"

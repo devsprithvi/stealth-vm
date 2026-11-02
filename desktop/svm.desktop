@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Stealth VM
+Comment=Open the persistent stealth Linux VM
+Exec=@ROOT@/bin/svm-gui
+Icon=computer
+Terminal=false
+Categories=System;Emulator;
+Keywords=vm;qemu;linux;stealth;
+StartupNotify=true

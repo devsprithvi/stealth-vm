@@ -1,0 +1,21 @@
+# Windows 10 22H2 — default stealth profile.
+# No TPM, no Secure Boot: the widest compatibility and the fewest
+# virtualisation tells. Windows 10 is EOL, so this is for isolated testing.
+
+os = "windows"
+base = "win10"
+
+[resources]
+vcpus = 8
+memory_mb = 8192
+disk_gb = 500
+
+[display]
+audio = false
+
+[network]
+nic = "e1000e"
+
+[hardware]
+secure_boot = false
+tpm = false

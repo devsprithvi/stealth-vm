@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime state
+vms/*
+!vms/.gitkeep
+logs/*
+!logs/.gitkeep
+runtime/*
+!runtime/.gitkeep
+
+# Large / licensed artifacts
+images/iso/*
+!images/iso/.gitkeep
+images/base/*
+!images/base/.gitkeep
+build/downloads/*
+!build/downloads/.gitkeep
+build/src/*
+!build/src/.gitkeep
+
+*.qcow2
+*.fd
+*.iso
+*.log
+*.pid
+*.sock

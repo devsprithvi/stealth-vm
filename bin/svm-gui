@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Clickable launcher: resume the newest session or create the first one.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+profile="${SVM_PROFILE:-linux}"
+
+notify() {
+    command -v notify-send >/dev/null 2>&1 && notify-send "Stealth VM" "$1" || true
+}
+
+if ! sessions="$(./bin/svm list --json 2>/dev/null)"; then
+    notify "Could not read the session list."
+    exit 1
+fi
+
+selection="$(
+    printf '%s' "$sessions" | python3 -c '
+import json, sys
+sessions = json.load(sys.stdin)
+running = [s for s in sessions if s.get("status") == "running"]
+if running:
+    chosen = max(running, key=lambda s: s.get("created_at", ""))
+    print("running", chosen["id"])
+elif sessions:
+    chosen = max(sessions, key=lambda s: s.get("created_at", ""))
+    print("stopped", chosen["id"])
+else:
+    print("none", "-")
+'
+)"
+read -r mode session_id <<<"$selection"
+
+case "$mode" in
+    running)
+        if ! ./bin/svm attach "$session_id"; then
+            notify "Could not open the SPICE viewer for $session_id."
+            exit 1
+        fi
+        ;;
+    stopped)
+        if ! ./bin/svm run "$session_id"; then
+            notify "Could not start $session_id."
+            exit 1
+        fi
+        ;;
+    none)
+        if ! ./bin/svm run --fresh --profile "$profile"; then
+            notify "Could not create a new $profile session."
+            exit 1
+        fi
+        ;;
+    *)
+        notify "Unexpected session state: $mode"
+        exit 1
+        ;;
+esac

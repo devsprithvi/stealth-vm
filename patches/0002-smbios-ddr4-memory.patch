@@ -1,0 +1,46 @@
+From: svm
+Subject: [PATCH] smbios: describe DDR4 DIMMs instead of generic RAM
+
+QEMU's SMBIOS type 17 table reports memory type 0x07 ("RAM"), type detail
+"Other", unknown bus widths, and zero voltage. Every memory kit in
+config/hardware.toml is DDR4, so report DDR4, synchronous, 64-bit data/total
+widths, and 1.2 V. This removes an easy virtual-machine fingerprint without
+changing the amount of RAM the guest sees.
+
+--- a/hw/smbios/smbios.c
++++ b/hw/smbios/smbios.c
+@@ -881,8 +881,8 @@
+ 
+     t->physical_memory_array_handle = cpu_to_le16(0x1000); /* Type 16 above */
+     t->memory_error_information_handle = cpu_to_le16(0xFFFE); /* Not provided */
+-    t->total_width = cpu_to_le16(0xFFFF); /* Unknown */
+-    t->data_width = cpu_to_le16(0xFFFF); /* Unknown */
++    t->total_width = cpu_to_le16(64);
++    t->data_width = cpu_to_le16(64);
+     size_mb = QEMU_ALIGN_UP(size, MiB) / MiB;
+     if (size_mb < MAX_T17_STD_SZ) {
+         t->size = cpu_to_le16(size_mb);
+@@ -897,8 +897,8 @@
+     snprintf(loc_str, sizeof(loc_str), "%s %d", type17.loc_pfx, instance);
+     SMBIOS_TABLE_SET_STR(17, device_locator_str, loc_str);
+     SMBIOS_TABLE_SET_STR(17, bank_locator_str, type17.bank);
+-    t->memory_type = 0x07; /* RAM */
+-    t->type_detail = cpu_to_le16(0x02); /* Other */
++    t->memory_type = 0x1A; /* DDR4 */
++    t->type_detail = cpu_to_le16(0x80); /* Synchronous */
+     t->speed = cpu_to_le16(type17.speed);
+     SMBIOS_TABLE_SET_STR(17, manufacturer_str, type17.manufacturer);
+     SMBIOS_TABLE_SET_STR(17, serial_number_str, type17.serial);
+@@ -906,9 +906,9 @@
+     SMBIOS_TABLE_SET_STR(17, part_number_str, type17.part);
+     t->attributes = 0; /* Unknown */
+     t->configured_clock_speed = t->speed; /* reuse value for max speed */
+-    t->minimum_voltage = cpu_to_le16(0); /* Unknown */
+-    t->maximum_voltage = cpu_to_le16(0); /* Unknown */
+-    t->configured_voltage = cpu_to_le16(0); /* Unknown */
++    t->minimum_voltage = cpu_to_le16(1200);
++    t->maximum_voltage = cpu_to_le16(1200);
++    t->configured_voltage = cpu_to_le16(1200);
+ 
+     SMBIOS_BUILD_TABLE_POST;
+ }

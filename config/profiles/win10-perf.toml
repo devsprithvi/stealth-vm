@@ -1,0 +1,21 @@
+# Windows 10 22H2 — more vCPUs for heavy installers.
+# The host has 12 threads and 15 GiB; 8 GiB of guest RAM leaves headroom.
+# The 500 GB disk matches the 500 GB-class SSD entries in hardware.toml.
+
+os = "windows"
+base = "win10"
+
+[resources]
+vcpus = 12
+memory_mb = 8192
+disk_gb = 500
+
+[display]
+audio = false
+
+[network]
+nic = "e1000e"
+
+[hardware]
+secure_boot = false
+tpm = false

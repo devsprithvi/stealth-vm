@@ -1,0 +1,32 @@
+# Ubuntu desktop guest. The 4 GiB memory and 500 GB (decimal) disk sizes
+# match entries in hardware.toml. 500 GB is the labelled capacity of the
+# emulated SSD; the guest correctly sees ~465.7 GiB.
+#
+# Input is PS/2, not USB HID. q35 provides an i8042 controller, so the guest
+# reports a normal PS/2 keyboard and mouse instead of a QEMU USB tablet.
+
+os = "linux"
+base = "linux"
+
+[general]
+# A desktop VM keeps its state across viewer close/stop/start. Use
+# `svm run --fresh` or `svm destroy` when a disposable session is wanted.
+auto_destroy = false
+
+[resources]
+vcpus = 8
+memory_mb = 4096
+disk_gb = 500
+
+[display]
+audio = false
+
+[input]
+mode = "ps2"
+
+[network]
+nic = "e1000e"
+
+[hardware]
+secure_boot = false
+tpm = false

@@ -1,0 +1,28 @@
+From: svm
+Subject: [PATCH] smbios: report a desktop chassis, not "Other"
+
+QEMU's SMBIOS type 3 table hardcodes chassis type 0x01 ("Other") and zero
+power cords. A physical desktop reports type 0x03 ("Desktop") and at least one
+power cord. This is a small consistency fix applied after the anti-detection
+patch.
+
+--- a/hw/smbios/smbios.c
++++ b/hw/smbios/smbios.c
+@@ -656,7 +656,7 @@
+     SMBIOS_BUILD_TABLE_PRE(3, T3_BASE, true); /* required */
+ 
+     SMBIOS_TABLE_SET_STR(3, manufacturer_str, type3.manufacturer);
+-    t->type = 0x01; /* Other */
++    t->type = 0x03; /* Desktop */
+     SMBIOS_TABLE_SET_STR(3, version_str, type3.version);
+     SMBIOS_TABLE_SET_STR(3, serial_number_str, type3.serial);
+     SMBIOS_TABLE_SET_STR(3, asset_tag_number_str, type3.asset);
+@@ -666,7 +666,7 @@
+     t->security_status = 0x02; /* Unknown */
+     t->oem_defined = cpu_to_le32(0);
+     t->height = 0;
+-    t->number_of_power_cords = 0;
++    t->number_of_power_cords = 1;
+     t->contained_element_count = 0;
+     t->contained_element_record_length = 0;
+     SMBIOS_TABLE_SET_STR(3, sku_number_str, type3.sku);

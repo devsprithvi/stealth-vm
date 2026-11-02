@@ -1,0 +1,47 @@
+# Project defaults. Profile files in config/profiles/ override these.
+# The host has 12 threads / 15 GiB, so the default leaves headroom.
+#
+# Keep this file boring: every value here must have a matching consumer in
+# src/svm/. There is no point in a setting that silently does nothing.
+
+[general]
+# Linux is the working profile while the Windows base is deferred.
+default_profile = "linux"
+auto_destroy = true
+viewer = "remote-viewer"
+
+[resources]
+vcpus = 8
+memory_mb = 8192
+# Decimal GB, matching the capacity printed on real SSD labels. A 500 GB
+# disk therefore appears as ~465.7 GiB in the guest, exactly like real
+# hardware. Do not use qemu-img's "500G" suffix here: that means 500 GiB.
+disk_gb = 500
+
+[display]
+backend = "spice"
+video = "qxl"
+audio = false
+
+[input]
+# ps2 is the default: q35 already exposes an i8042 keyboard/mouse, and it
+# avoids QEMU's USB HID tablet identity (0627:0001 / "QEMU Tablet").
+# Use "usb" only if a guest really needs absolute pointer input.
+mode = "ps2"
+
+[network]
+mode = "user"                 # user (QEMU slirp); no bridge, no host forwards
+nic = "e1000e"
+subnet = "192.168.1.0/24"
+gateway = "192.168.1.1"
+dhcp_start = "192.168.1.100"
+dns = "192.168.1.2"
+ipv6 = false
+
+[hardware]
+machine = "q35"
+firmware = "ovmf"
+secure_boot = false
+tpm = false
+disk_bus = "sata"
+sandbox = true

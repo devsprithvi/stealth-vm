@@ -1,0 +1,22 @@
+# Windows 11 — requires TPM 2.0 and Secure Boot.
+# Experimental: the emulated TPM is itself a fingerprint, and Windows 11
+# enables more virtualisation-aware security features. Prefer win10 unless
+# the target software genuinely requires Windows 11.
+
+os = "windows"
+base = "win11"
+
+[resources]
+vcpus = 8
+memory_mb = 8192
+disk_gb = 500
+
+[display]
+audio = false
+
+[network]
+nic = "e1000e"
+
+[hardware]
+secure_boot = true
+tpm = true

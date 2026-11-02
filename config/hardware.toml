@@ -1,0 +1,259 @@
+# Hardware identity pools.
+#
+# The generator picks a CPU whose thread count matches the profile's vCPU
+# count, a memory kit whose size matches the profile's RAM, a disk whose
+# capacity matches the profile's disk, and a MAC OUI. Every value must be
+# self-consistent: a guest that sees 8 GiB of RAM must also see an 8 GiB DIMM.
+#
+# The host is AMD, so the AMD pool is used by default. The q35 machine model
+# still exposes Intel chipset PCI IDs; that is a known limitation for very
+# deep hardware-consistency checks (see docs/ARCHITECTURE.md).
+
+[amd]
+cpu_manufacturer = "Advanced Micro Devices, Inc."
+socket = "AM4"
+
+[[amd.cpus]]
+name = "AMD Ryzen 3 1200 4-Core Processor"
+family = 23          # 0x17, Zen
+model = 1
+stepping = 1
+cores = 4
+threads = 4
+max_speed = 3100
+processor_family = 107   # 0x6B, AMD Zen
+
+[[amd.cpus]]
+name = "AMD Ryzen 3 3100 4-Core Processor"
+family = 23          # 0x17, Zen 2
+model = 113          # 0x71, Matisse
+stepping = 0
+cores = 4
+threads = 8
+max_speed = 3600
+processor_family = 108   # 0x6C, AMD Zen 2
+
+[[amd.cpus]]
+# Renoir, no integrated graphics. The generator prefers this entry on hosts
+# whose CPUID family/model matches, so the guest's microcode revision (passed
+# through by KVM) stays consistent with the emulated CPU model.
+name = "AMD Ryzen 3 4100 4-Core Processor"
+family = 23          # 0x17, Zen 2
+model = 96           # 0x60, Renoir
+stepping = 1
+cores = 4
+threads = 8
+max_speed = 4000
+processor_family = 108
+
+[[amd.cpus]]
+name = "AMD Ryzen 5 3500 6-Core Processor"
+family = 23
+model = 113
+stepping = 0
+cores = 6
+threads = 6
+max_speed = 4100
+processor_family = 108
+
+[[amd.cpus]]
+name = "AMD Ryzen 5 3600 6-Core Processor"
+family = 23
+model = 113
+stepping = 0
+cores = 6
+threads = 12
+max_speed = 3600
+processor_family = 108
+
+[[amd.boards]]
+manufacturer = "ASUSTeK COMPUTER INC."
+product = "ROG STRIX B550-F GAMING"
+version = "Rev X.0x"
+bios_vendor = "American Megatrends International, LLC."
+bios_version = "F.42"
+bios_date = "03/14/2024"
+family = "ROG STRIX"
+sku = "SKU"
+
+[[amd.boards]]
+manufacturer = "Gigabyte Technology Co., Ltd."
+product = "B550 AORUS ELITE AX V2"
+version = "Default string"
+bios_vendor = "American Megatrends International, LLC."
+bios_version = "FE"
+bios_date = "05/23/2024"
+family = "B550"
+sku = "Default string"
+
+[[amd.boards]]
+manufacturer = "Micro-Star International Co., Ltd."
+product = "MAG B550 TOMAHAWK (MS-7C91)"
+version = "2.0"
+bios_vendor = "American Megatrends International, LLC."
+bios_version = "A.G0"
+bios_date = "01/16/2024"
+family = "MAG"
+sku = "Default string"
+
+[intel]
+cpu_manufacturer = "GenuineIntel"
+socket = "LGA1200"
+
+[[intel.cpus]]
+name = "Intel(R) Core(TM) i3-10100 CPU @ 3.60GHz"
+family = 6
+model = 165          # 0xA5, Comet Lake
+stepping = 3
+cores = 4
+threads = 8
+max_speed = 3600
+processor_family = 197   # 0xC5, Intel Core i3
+
+[[intel.cpus]]
+name = "Intel(R) Core(TM) i5-10400 CPU @ 2.90GHz"
+family = 6
+model = 165
+stepping = 3
+cores = 6
+threads = 12
+max_speed = 2900
+processor_family = 198   # 0xC6, Intel Core i5
+
+[[intel.boards]]
+manufacturer = "ASUSTeK COMPUTER INC."
+product = "ROG STRIX Z490-E GAMING"
+version = "Rev 1.xx"
+bios_vendor = "American Megatrends Inc."
+bios_version = "2201"
+bios_date = "07/13/2021"
+family = "ROG STRIX"
+sku = "SKU"
+
+[[intel.boards]]
+manufacturer = "Gigabyte Technology Co., Ltd."
+product = "Z490 AORUS ELITE AC"
+version = "Default string"
+bios_vendor = "American Megatrends Inc."
+bios_version = "F21"
+bios_date = "11/23/2021"
+family = "Z490"
+sku = "Default string"
+
+# Shared pools -------------------------------------------------------------
+#
+# Memory sizes must match a profile's resources.memory_mb exactly. The guest
+# sees one DIMM whose size equals the VM's RAM (QEMU builds type 17 itself).
+
+[[memory]]
+manufacturer = "Corsair"
+part = "CMK8GX4M1E3200C16"
+speed = 3200
+size_mb = 8192
+
+[[memory]]
+manufacturer = "G.Skill"
+part = "F4-3200C16S-8GVKB"
+speed = 3200
+size_mb = 8192
+
+[[memory]]
+manufacturer = "Kingston"
+part = "KF3200C16D4/8GX"
+speed = 3200
+size_mb = 8192
+
+[[memory]]
+manufacturer = "Corsair"
+part = "CMK4GX4M1E3200C16"
+speed = 3200
+size_mb = 4096
+
+[[memory]]
+manufacturer = "G.Skill"
+part = "F4-3200C16S-4GVKB"
+speed = 3200
+size_mb = 4096
+
+[[memory]]
+manufacturer = "Kingston"
+part = "KF3200C16D4/4GX"
+speed = 3200
+size_mb = 4096
+
+# Disk capacity is the decimal GB printed on the drive label, and must match
+# a profile's resources.disk_gb exactly. A 500 GB SSD is a normal desktop disk;
+# the guest therefore sees ~465.7 GiB, not 500 GiB. qcow2 keeps it sparse.
+[[disks]]
+model = "Samsung SSD 870 EVO 500GB"
+capacity_gb = 500
+serial_prefix = "S3Y8NB0K"
+firmware = "SVT02B6Q"
+
+[[disks]]
+# Full ATA model string. Linux's sysfs `model` attribute truncates ATA model
+# names to 16 characters, exactly as it does on a real WD drive; udev's
+# ID_MODEL and the ATA IDENTIFY data keep the full string.
+model = "WDC WDS500G2B0A-00SM50"
+capacity_gb = 500
+serial_prefix = "WD-WCC4E"
+firmware = "411040WD"
+
+[[disks]]
+model = "CT500MX500SSD1"
+capacity_gb = 500
+serial_prefix = "2020E4"
+firmware = "M3CR045"
+
+# Kept for older 250 GB bases; new profiles use the 500 GB entries above.
+[[disks]]
+model = "Samsung SSD 870 EVO 250GB"
+capacity_gb = 250
+serial_prefix = "S3Y8NB0K"
+firmware = "SVT02B6Q"
+
+[[disks]]
+model = "WDC WDS250G2B0A-00SM50"
+capacity_gb = 250
+serial_prefix = "WD-WCC4E"
+firmware = "411040WD"
+
+[[disks]]
+model = "CT250MX500SSD1"
+capacity_gb = 250
+serial_prefix = "2020E4"
+firmware = "M3CR045"
+
+# Real, unicast, globally-administered OUIs. Avoid 52:54:00, 00:0C:29,
+# 00:50:56, 08:00:27, 00:1C:42, 00:15:5D (hypervisor ranges).
+[[mac_ouis]]
+vendor = "ASUSTeK COMPUTER INC."
+oui = "00:1A:2B"
+
+[[mac_ouis]]
+vendor = "Gigabyte Technology Co., Ltd."
+oui = "1C:1B:0D"
+
+[[mac_ouis]]
+vendor = "Micro-Star International Co., Ltd."
+oui = "4C:CC:6A"
+
+[[mac_ouis]]
+vendor = "Intel Corporate"
+oui = "3C:97:0E"
+
+[[mac_ouis]]
+vendor = "Intel Corporate"
+oui = "00:1B:21"
+
+[[mac_ouis]]
+vendor = "Intel Corporate"
+oui = "8C:16:45"
+
+[[mac_ouis]]
+vendor = "Intel Corporate"
+oui = "A4:BB:6D"
+
+[[mac_ouis]]
+vendor = "Realtek Semiconductor Corp."
+oui = "00:E0:4C"

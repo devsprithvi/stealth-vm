@@ -1,0 +1,34 @@
+From: svm
+Subject: [PATCH] acpi: use AMI-style OEM IDs instead of Intel defaults
+
+The anti-detection patch makes every ACPI table use ACPI_BUILD_APPNAME6/8,
+which default to "INTEL " / "PC8086  ". That is inconsistent with the AMD
+CPU and the AMI Aptio firmware identity used by the emulated desktop boards.
+Real AMI boards expose OEM ID "ALASKA", OEM Table ID "A M I", and creator
+ID "AMI ". This is a small consistency fix; it changes no behaviour.
+
+--- a/include/hw/acpi/aml-build.h
++++ b/include/hw/acpi/aml-build.h
+@@ -4,8 +4,8 @@
+ #include "hw/acpi/acpi-defs.h"
+ #include "hw/acpi/bios-linker-loader.h"
+ 
+-#define ACPI_BUILD_APPNAME6 "INTEL "
+-#define ACPI_BUILD_APPNAME8 "PC8086  "
++#define ACPI_BUILD_APPNAME6 "ALASKA"
++#define ACPI_BUILD_APPNAME8 "A M I   "
+ 
+ #define ACPI_BUILD_TABLE_FILE "etc/acpi/tables"
+ #define ACPI_BUILD_RSDP_FILE "etc/acpi/rsdp"
+--- a/hw/acpi/aml-build.c
++++ b/hw/acpi/aml-build.c
+@@ -1725,7 +1725,7 @@ void acpi_table_begin(AcpiTable *desc, GArray *array)
+     build_append_padded_str(array, ACPI_BUILD_APPNAME6, 6, '\0'); /* OEMID */
+     /* OEM Table ID */
+     build_append_padded_str(array, ACPI_BUILD_APPNAME8, 8, '\0');
+     build_append_int_noprefix(array, 1, 4); /* OEM Revision */
+-    g_array_append_vals(array, "PTL ", 4); /* Creator ID */
++    g_array_append_vals(array, "AMI ", 4); /* Creator ID */
+     build_append_int_noprefix(array, 1, 4); /* Creator Revision */
+ }
+ 
