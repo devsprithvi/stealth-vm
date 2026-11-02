@@ -962,3 +962,37 @@ def base_delete(
             raise typer.Exit(0)
     delete_base(cfg, name)
     console.print(f"[green]deleted base[/] {name}")
+
+
+@app.command()
+def paste(
+    text: Optional[str] = typer.Argument(None, help="Text to paste. If omitted, reads host clipboard."),
+    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Session id or prefix (defaults to active session)."),
+    delay: float = typer.Option(3.0, "--delay", help="Delay between keypresses in milliseconds."),
+) -> None:
+    """Type host clipboard or specified text into the VM as stealth PS/2 hardware keystrokes."""
+    from .paste import read_host_clipboard, send_text_as_keystrokes
+
+    cfg = _cfg()
+    session = None
+    if session_id:
+        try:
+            session = resolve_session(cfg, session_id)
+        except StateError as exc:
+            _fail(str(exc))
+    else:
+        running_sessions = [s for s in list_sessions(cfg) if s.is_running()]
+        if not running_sessions:
+            _fail("no running virtual machine session found")
+        session = running_sessions[0]
+
+    content = text if text is not None else read_host_clipboard()
+    if not content:
+        _fail("no text provided and host clipboard is empty")
+
+    try:
+        count = send_text_as_keystrokes(session.qmp, content, delay_ms=delay)
+        console.print(f"[green]pasted[/] {count} characters into {session.id} via hardware PS/2 keystrokes")
+    except Exception as exc:
+        _fail(f"failed to inject keystrokes: {exc}")
+
