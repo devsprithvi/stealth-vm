@@ -968,7 +968,7 @@ def base_delete(
 def paste(
     text: Optional[str] = typer.Argument(None, help="Text to paste. If omitted, reads host clipboard."),
     session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Session id or prefix (defaults to active session)."),
-    delay: float = typer.Option(3.0, "--delay", help="Delay between keypresses in milliseconds."),
+    delay: float = typer.Option(15.0, "--delay", help="Delay between keypresses in milliseconds."),
 ) -> None:
     """Type host clipboard or specified text into the VM as stealth PS/2 hardware keystrokes."""
     from .paste import read_host_clipboard, send_text_as_keystrokes

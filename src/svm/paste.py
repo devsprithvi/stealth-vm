@@ -14,7 +14,7 @@ import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 # Map of ASCII character -> (qcode_key_name, needs_shift)
 _KEY_MAP: dict[str, tuple[str, bool]] = {
@@ -45,7 +45,6 @@ _KEY_MAP: dict[str, tuple[str, bool]] = {
     " ": ("spc", False),
     "\t": ("tab", False),
     "\n": ("ret", False),
-    "\r": ("ret", False),
     # Punctuation & symbols
     "-": ("minus", False), "_": ("minus", True),
     "=": ("equal", False), "+": ("equal", True),
@@ -60,54 +59,86 @@ _KEY_MAP: dict[str, tuple[str, bool]] = {
     "`": ("grave_accent", False), "~": ("grave_accent", True),
 }
 
+# Normalization for common unicode characters that user copies from browsers/docs
+_UNICODE_REPLACEMENTS: dict[str, str] = {
+    "\u00a0": " ",      # non-breaking space
+    "\u2018": "'",      # left single quotation mark
+    "\u2019": "'",      # right single quotation mark
+    "\u201c": '"',      # left double quotation mark
+    "\u201d": '"',      # right double quotation mark
+    "\u2013": "-",      # en dash
+    "\u2014": "-",      # em dash
+    "\u2026": "...",    # horizontal ellipsis
+}
+
+
+def normalize_text(text: str) -> str:
+    """Normalize text into typable ASCII characters."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    for orig, repl in _UNICODE_REPLACEMENTS.items():
+        text = text.replace(orig, repl)
+    return text
+
 
 def read_host_clipboard() -> str:
-    """Read the current text from the host clipboard using wl-paste or xclip."""
+    """Read the current text from the host clipboard or primary selection using wl-paste or xclip."""
     if shutil.which("wl-paste"):
-        try:
-            result = subprocess.run(
-                ["wl-paste", "--no-newline"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=2.0,
-                check=False,
-            )
-            if result.returncode == 0 and result.stdout:
-                return result.stdout
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        # Try clipboard selection first
+        for args in (["wl-paste", "--no-newline"], ["wl-paste", "--primary", "--no-newline"]):
+            try:
+                result = subprocess.run(
+                    args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=2.0,
+                    check=False,
+                )
+                if result.returncode == 0 and result.stdout:
+                    return result.stdout
+            except (subprocess.TimeoutExpired, OSError):
+                pass
 
     if shutil.which("xclip"):
-        try:
-            result = subprocess.run(
-                ["xclip", "-selection", "clipboard", "-o"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=2.0,
-                check=False,
-            )
-            if result.returncode == 0 and result.stdout:
-                return result.stdout
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        # Try clipboard selection first, then primary
+        for sel in ("clipboard", "primary"):
+            try:
+                result = subprocess.run(
+                    ["xclip", "-selection", sel, "-o"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=2.0,
+                    check=False,
+                )
+                if result.returncode == 0 and result.stdout:
+                    return result.stdout
+            except (subprocess.TimeoutExpired, OSError):
+                pass
 
     return ""
 
 
-def send_text_as_keystrokes(qmp_sock: Path, text: str, delay_ms: float = 3.0) -> int:
-    """Send arbitrary text into the VM via QMP send-key as PS/2 hardware keystrokes.
+def send_text_as_keystrokes(
+    qmp_sock: Path,
+    text: str,
+    delay_ms: float = 15.0,
+    hold_time_ms: int = 12,
+) -> int:
+    """Send text into the VM via QMP send-key as PS/2 hardware keystrokes.
 
-    Returns the number of characters successfully injected.
+    Uses an explicit hold-time and inter-key delay so that shifted characters
+    (like :, ?, uppercase letters) and symbols never bleed into subsequent keys
+    or overflow the emulated PS/2 controller buffer.
     """
     if not qmp_sock.exists():
         raise FileNotFoundError(f"QMP socket does not exist: {qmp_sock}")
 
-    delay_sec = max(0.001, delay_ms / 1000.0)
+    text = normalize_text(text)
+    delay_sec = max(0.005, delay_ms / 1000.0)
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        conn.settimeout(5.0)
+        conn.settimeout(10.0)
         conn.connect(str(qmp_sock))
         stream = conn.makefile("rwb")
         stream.readline()  # QMP greeting
@@ -127,7 +158,13 @@ def send_text_as_keystrokes(qmp_sock: Path, text: str, delay_ms: float = 3.0) ->
                 keys.append({"type": "qcode", "data": "shift"})
             keys.append({"type": "qcode", "data": qcode})
 
-            payload = json.dumps({"execute": "send-key", "arguments": {"keys": keys}})
+            payload = json.dumps({
+                "execute": "send-key",
+                "arguments": {
+                    "keys": keys,
+                    "hold-time": hold_time_ms,
+                },
+            })
             stream.write(payload.encode("utf-8") + b"\n")
             stream.flush()
             stream.readline()
