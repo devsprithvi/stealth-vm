@@ -15,7 +15,7 @@ auto_destroy = false
 
 [resources]
 vcpus = 8
-memory_mb = 6144
+memory_mb = 8192
 disk_gb = 500
 
 [display]
