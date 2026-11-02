@@ -24,6 +24,8 @@ video = "qxl"
 audio = true
 xres = 1920
 yres = 1080
+vram_mb = 1024
+surfaces = 2048
 
 [input]
 # ps2 is the default: q35 already exposes an i8042 keyboard/mouse, and it

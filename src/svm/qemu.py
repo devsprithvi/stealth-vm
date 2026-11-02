@@ -222,13 +222,17 @@ def render_hardware_config(
     add("")
 
     # Display -------------------------------------------------------------
+    vram_mb = int(display.get("vram_mb", 1024))
+    surfaces = int(display.get("surfaces", 2048))
     add('[device "video"]')
     add(f'  driver = {q(video + "-vga")}')
     add('  bus = "pcie.0"')
     add('  addr = "01.0"')
     add('  ram_size = "268435456"')
-    add('  vram_size = "268435456"')
+    add('  vram_size = "536870912"')
+    add(f'  vram64_size_mb = "{vram_mb}"')
     add('  vgamem_mb = "256"')
+    add(f'  surfaces = "{surfaces}"')
     add(f'  xres = "{xres}"')
     add(f'  yres = "{yres}"')
     add("")
