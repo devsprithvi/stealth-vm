@@ -227,6 +227,62 @@ installed fonts and apps; a different network egress option; canvas/WebGL
 differences (hard in a VM without a GPU). State plainly to the user which items
 cannot be solved without real hardware.
 
+## 8. Static analysis of Qoder (done 3 Nov 2026, this chat) — do not re-fix GPU/CPUID yet
+
+Ran the "cheapest high-value experiment" from section 7 before changing anything.
+Recipe and tooling are now in `docs/APP-ANALYSIS.md` and `scripts/asar-extract.py`
+(reusable for every future app the user tests — this was explicitly requested
+as an ongoing practice, not a one-off). Downloaded the real installers (the
+obvious `download.qoder.com/<name>.exe` guesses 404; found the real CDN prefix
+`qoder-app/releases/latest/` by grepping the download page's JS chunks),
+extracted `app.asar` with a dependency-free Python parser (no Node/npm needed
+for that step), found the main-process bundle deliberately obfuscated beyond
+normal minification (javascript-obfuscator.io string-array pattern, 57,810
+pooled strings), decoded the entire string pool (cheap: no AST work, just
+base64-decode every pool entry) and grepped it.
+
+**Result: zero evidence of hardware/VM detection.** No `vmware`/`virtualbox`/
+`qemu`/`kvm`/`hypervisor`/`xen`/`bochs`/`seabios`/`ovmf` anywhere in the pool.
+No `webgl`/`getGPUInfo`/canvas-fingerprint terms either. What Qoder actually
+does: a local SQLite `local_device_identity` table holds one `device_id`,
+generated once and sent as `machineId` to its own login/auth and sync backend;
+plus an `account-fingerprint-salt` used server-side. This is Qoder's own
+app-data file (lives in the session overlay, not the sealed base — a
+disposable session should get a fresh one same as a fresh user profile) and
+its own account/device-pairing system, not OS/firmware VM fingerprinting.
+
+**Conclusion: don't spend effort on GPU/CPUID/OVMF (gaps 1-6 in section 4 and
+`docs/ANTI-DETECTION.md`) to fix the Qoder symptom.** None of that code path
+exists in Qoder. Section 7's hypothesis 1 (WARP network reputation —
+shared/abuse-scored egress IP, timezone mismatch) and hypothesis 5
+(account-side state: same account/trial already used, or the
+`account-fingerprint-salt` system flagging something at the account level,
+independent of the VM) are now the leading explanations, with real code to
+back them instead of a guess. Hypothesis 2 (stable Electron/Chromium
+fingerprint across sessions) is still plausible but found no supporting code
+in Qoder specifically — it would show up as a different `device_id` per
+session in Qoder's own local sqlite db, worth checking once a guest boots.
+
+**Next step (not yet done, needs the user's go-ahead to boot a guest and their
+own action to sign in): hypothesis 1 and 5 tests from section 7** — repeat the
+Qoder sign-in with WARP disconnected, and/or with a never-before-used account,
+and see if the symptom changes. Still unknown and still needed from the user:
+the exact symptom (error text, blocked sign-in, trial refused, forced
+verification?) — ask before spending more guest time guessing at it.
+
+**Host memory note for next chat:** a leftover disposable session from an
+earlier chat was found still running at session start (8 GiB profile, 24 min
+old, host down to 291 MiB free) and was destroyed with the user's permission.
+Always check `free -m` and `svm list` at the start of a chat, before assuming
+the host is in the state the previous checkpoint described.
+
+**Built, not yet used against a guest:** `guest/fingerprint.html` per section
+7's spec (navigator/screen/timezone/WebGL/canvas/audio/fonts/perf, combined
+hash, self-contained, no network calls, works from `file://`). Deliver the
+same way as the stealth probes (`svm run --cdrom`), run it on the real host
+browser as a control plus each guest/session with and without WARP, diff the
+`combinedHash` and the individual fields.
+
 **Working notes for the next chat.**
 - The user wants brutal honesty and wants things tested, not asserted. Report
   failures first. Do not claim stealth from our own probe alone.

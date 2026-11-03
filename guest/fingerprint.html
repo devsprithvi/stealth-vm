@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>svm fingerprint harness</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; margin: 2em; background:#111; color:#ddd; }
+  h1 { font-size: 1.3em; }
+  h2 { font-size: 1.05em; margin-top: 1.6em; border-bottom: 1px solid #444; padding-bottom: .2em; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1em; }
+  td, th { border: 1px solid #333; padding: 4px 8px; font-size: 13px; text-align: left; vertical-align: top; word-break: break-all; }
+  th { background:#1a1a1a; width: 220px; }
+  tr:nth-child(even) td { background: #161616; }
+  #combined { font-size: 1.4em; font-weight: bold; color: #7fd; padding: .6em; background:#1a1a1a; border: 1px solid #333; }
+  textarea { width: 100%; height: 220px; background:#0b0b0b; color:#9f9; font-family: monospace; font-size: 12px; }
+  button { padding: .5em 1em; margin: .5em .5em .5em 0; cursor: pointer; }
+  .hint { color:#888; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>svm fingerprint harness</h1>
+<p class="hint">
+  Read-only, no network calls. Run this on the real host browser (control) and
+  on each guest/session, with and without WARP, then diff the JSON blocks.
+  See <code>docs/CHECKPOINT.md</code> section 7.
+</p>
+<div id="combined">computing...</div>
+<button onclick="copyJson()">Copy JSON to clipboard</button>
+<button onclick="rerun()">Re-run</button>
+<h2>Summary</h2>
+<table id="summary"></table>
+<h2>Raw JSON</h2>
+<textarea id="json" readonly></textarea>
+
+<script>
+// ---- small deterministic string hash (cyrb53), no crypto.subtle dependency
+// so this also works in non-secure / file:// contexts. ----
+function cyrb53(str, seed = 0) {
+  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
+}
+
+function safe(fn, fallback = null) {
+  try { return fn(); } catch (e) { return "ERR:" + e.message; }
+}
+
+function getNavigatorInfo() {
+  const n = navigator;
+  return {
+    userAgent: n.userAgent,
+    platform: safe(() => n.platform),
+    vendor: n.vendor,
+    language: n.language,
+    languages: Array.isArray(n.languages) ? n.languages.join(",") : String(n.languages),
+    hardwareConcurrency: n.hardwareConcurrency,
+    deviceMemory: n.deviceMemory,
+    maxTouchPoints: n.maxTouchPoints,
+    cookieEnabled: n.cookieEnabled,
+    webdriver: n.webdriver,
+    pdfViewerEnabled: safe(() => n.pdfViewerEnabled),
+    doNotTrack: n.doNotTrack,
+    plugins: safe(() => Array.from(n.plugins || []).map(p => p.name).join(";")),
+    mimeTypes: safe(() => Array.from(n.mimeTypes || []).map(m => m.type).join(";")),
+    pointerEnabled: typeof window.PointerEvent !== "undefined",
+  };
+}
+
+function getScreenInfo() {
+  const s = screen;
+  return {
+    width: s.width, height: s.height,
+    availWidth: s.availWidth, availHeight: s.availHeight,
+    colorDepth: s.colorDepth, pixelDepth: s.pixelDepth,
+    devicePixelRatio: window.devicePixelRatio,
+    orientation: safe(() => s.orientation && s.orientation.type),
+    innerWidth: window.innerWidth, innerHeight: window.innerHeight,
+    outerWidth: window.outerWidth, outerHeight: window.outerHeight,
+  };
+}
+
+function getTimeInfo() {
+  const d = new Date();
+  return {
+    timeZone: safe(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
+    locale: safe(() => Intl.DateTimeFormat().resolvedOptions().locale),
+    tzOffsetMinutes: d.getTimezoneOffset(),
+    isoNow: d.toISOString(),
+    localeDateString: d.toLocaleString(),
+  };
+}
+
+function getWebGLInfo() {
+  const out = { webgl1: null, webgl2: null };
+  for (const [key, ctxName] of [["webgl1", "webgl"], ["webgl2", "webgl2"]]) {
+    try {
+      const canvas = document.createElement("canvas");
+      const gl = canvas.getContext(ctxName);
+      if (!gl) { out[key] = "unsupported"; continue; }
+      const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+      out[key] = {
+        vendor: gl.getParameter(gl.VENDOR),
+        renderer: gl.getParameter(gl.RENDERER),
+        unmaskedVendor: dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : null,
+        unmaskedRenderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null,
+        version: gl.getParameter(gl.VERSION),
+        shadingLanguageVersion: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+        maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+        extensions: (gl.getSupportedExtensions() || []).join(","),
+      };
+    } catch (e) { out[key] = "ERR:" + e.message; }
+  }
+  return out;
+}
+
+function getCanvasFingerprint() {
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 280; canvas.height = 60;
+    const ctx = canvas.getContext("2d");
+    ctx.textBaseline = "top";
+    ctx.font = "16px 'Arial'";
+    ctx.fillStyle = "#f60";
+    ctx.fillRect(0, 0, 100, 20);
+    ctx.fillStyle = "#069";
+    ctx.fillText("svm fingerprint, stealth-vm \u2708\uFE0F 0123", 2, 15);
+    ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
+    ctx.fillText("svm fingerprint, stealth-vm \u2708\uFE0F 0123", 4, 17);
+    ctx.beginPath();
+    ctx.arc(50, 40, 15, 0, Math.PI * 2, true);
+    ctx.fillStyle = "#639";
+    ctx.fill();
+    const data = canvas.toDataURL();
+    return { hash: cyrb53(data), length: data.length };
+  } catch (e) { return { error: e.message }; }
+}
+
+function getAudioFingerprint() {
+  return new Promise((resolve) => {
+    try {
+      const AudioCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (!AudioCtx) return resolve({ error: "no OfflineAudioContext" });
+      const ctx = new AudioCtx(1, 5000, 44100);
+      const osc = ctx.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.value = 10000;
+      const compressor = ctx.createDynamicsCompressor();
+      [["threshold", -50], ["knee", 40], ["ratio", 12], ["attack", 0], ["release", 0.25]]
+        .forEach(([k, v]) => { if (compressor[k]) compressor[k].value = v; });
+      osc.connect(compressor);
+      compressor.connect(ctx.destination);
+      osc.start(0);
+      ctx.startRendering();
+      const timeout = setTimeout(() => resolve({ error: "timeout" }), 3000);
+      ctx.oncomplete = (ev) => {
+        clearTimeout(timeout);
+        let sum = 0;
+        const data = ev.renderedBuffer.getChannelData(0);
+        for (let i = 4500; i < data.length; i++) sum += Math.abs(data[i]);
+        resolve({ hash: cyrb53(sum.toString()), sum });
+      };
+    } catch (e) { resolve({ error: e.message }); }
+  });
+}
+
+// Font-availability probe via width comparison against generic fallbacks.
+function getFontList() {
+  const testFonts = [
+    "Arial", "Arial Black", "Calibri", "Cambria", "Candara", "Comic Sans MS",
+    "Consolas", "Courier New", "Georgia", "Helvetica", "Impact", "Lucida Console",
+    "Segoe UI", "Segoe Print", "Segoe Script", "Tahoma", "Times New Roman",
+    "Trebuchet MS", "Verdana", "Ubuntu", "DejaVu Sans", "Liberation Sans",
+    "Noto Sans", "Cantarell", "FreeSans", "Droid Sans", "Yu Gothic", "Microsoft YaHei",
+  ];
+  const baseFonts = ["monospace", "sans-serif", "serif"];
+  const testString = "mmmmmmmmmmlli";
+  const testSize = "72px";
+  const span = document.createElement("span");
+  span.style.position = "absolute";
+  span.style.left = "-9999px";
+  span.style.fontSize = testSize;
+  span.innerHTML = testString;
+  document.body.appendChild(span);
+  const baseSizes = {};
+  for (const bf of baseFonts) {
+    span.style.fontFamily = bf;
+    baseSizes[bf] = { w: span.offsetWidth, h: span.offsetHeight };
+  }
+  const detected = [];
+  for (const font of testFonts) {
+    let found = false;
+    for (const bf of baseFonts) {
+      span.style.fontFamily = `'${font}', ${bf}`;
+      if (span.offsetWidth !== baseSizes[bf].w || span.offsetHeight !== baseSizes[bf].h) {
+        found = true; break;
+      }
+    }
+    if (found) detected.push(font);
+  }
+  document.body.removeChild(span);
+  return detected;
+}
+
+function getPerfInfo() {
+  // Not real RDTSC/CPUID timing (JS cannot do that); a rough, coarse signal only.
+  const iterations = 2_000_000;
+  const t0 = performance.now();
+  let x = 0;
+  for (let i = 0; i < iterations; i++) x += Math.sqrt(i) % 7;
+  const t1 = performance.now();
+  return {
+    busyLoopMs: +(t1 - t0).toFixed(3),
+    timeOrigin: performance.timeOrigin,
+    now: performance.now(),
+    hardwareConcurrency: navigator.hardwareConcurrency,
+  };
+}
+
+async function getGPUAdapterInfo() {
+  try {
+    if (!navigator.gpu) return "no navigator.gpu (WebGPU unsupported)";
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) return "requestAdapter() returned null";
+    const info = adapter.info || (adapter.requestAdapterInfo ? await adapter.requestAdapterInfo() : null);
+    return info ? { vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description } : "no adapter info";
+  } catch (e) { return "ERR:" + e.message; }
+}
+
+async function run() {
+  const report = {
+    generatedAt: new Date().toISOString(),
+    navigator: getNavigatorInfo(),
+    screen: getScreenInfo(),
+    time: getTimeInfo(),
+    webgl: getWebGLInfo(),
+    webgpu: await getGPUAdapterInfo(),
+    canvas: getCanvasFingerprint(),
+    audio: await getAudioFingerprint(),
+    fonts: getFontList(),
+    perf: getPerfInfo(),
+    url: location.href,
+  };
+  const serialized = JSON.stringify(report, null, 2);
+  const combined = cyrb53(serialized);
+  report.combinedHash = combined;
+
+  document.getElementById("combined").textContent = "combined hash: " + combined;
+  document.getElementById("json").value = JSON.stringify(report, null, 2);
+
+  const rows = [
+    ["combinedHash", combined],
+    ["userAgent", report.navigator.userAgent],
+    ["platform", report.navigator.platform],
+    ["hardwareConcurrency", report.navigator.hardwareConcurrency],
+    ["deviceMemory", report.navigator.deviceMemory],
+    ["languages", report.navigator.languages],
+    ["webdriver", report.navigator.webdriver],
+    ["screen", `${report.screen.width}x${report.screen.height} @${report.screen.devicePixelRatio}x, depth=${report.screen.colorDepth}`],
+    ["timeZone", report.time.timeZone + " (offset " + report.time.tzOffsetMinutes + "min)"],
+    ["locale", report.time.locale],
+    ["webgl1.renderer", safe(() => report.webgl.webgl1.renderer)],
+    ["webgl1.unmaskedRenderer", safe(() => report.webgl.webgl1.unmaskedRenderer)],
+    ["webgl1.unmaskedVendor", safe(() => report.webgl.webgl1.unmaskedVendor)],
+    ["webgpu", typeof report.webgpu === "string" ? report.webgpu : JSON.stringify(report.webgpu)],
+    ["canvas.hash", report.canvas.hash],
+    ["audio.hash", report.audio.hash],
+    ["fonts (" + report.fonts.length + ")", report.fonts.join(", ")],
+    ["perf.busyLoopMs", report.perf.busyLoopMs],
+  ];
+  const table = document.getElementById("summary");
+  table.innerHTML = rows.map(([k, v]) => `<tr><th>${k}</th><td>${v === undefined ? "" : String(v)}</td></tr>`).join("");
+
+  return report;
+}
+
+function copyJson() {
+  const ta = document.getElementById("json");
+  ta.select();
+  document.execCommand("copy");
+}
+
+function rerun() { run(); }
+
+run();
+</script>
+</body>
+</html>
