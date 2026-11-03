@@ -92,13 +92,19 @@ WARP's Lockdown mode inside the guest.
 
 Two caveats matter:
 
-1. **The slirp gateway is a host alias.** `192.168.1.1` maps to the host's
-   loopback. A guest can connect to services listening on the host's
-   `127.0.0.1`, even though it cannot reach the host's LAN IP. This is a
-   property of QEMU user-mode networking, not a `svm` bug. Do not run sensitive
-   local services while a guest is running. For stronger isolation, use a
-   network namespace for QEMU or the passt backend with
-   `map-host-loopback=none` (not implemented in `svm` yet).
+1. **Host loopback is blocked; the LAN is not.** Stock QEMU maps the slirp
+   gateway `192.168.1.1` to the host's `127.0.0.1`. `patches/0004` sets slirp's
+   `disable_host_loopback`, and the probes confirm the guest cannot reach a
+   host listener on `127.0.0.1` (re-test with `-HostPort` / `--host-port` after
+   any QEMU rebuild). User-mode NAT still lets the guest open connections to
+   anything the *host* can reach, which includes devices on your LAN (router,
+   NAS, printers). WARP's default split-tunnel rules can also send private
+   ranges directly. For samples that scan or spread, block private ranges for
+   the QEMU process on the host (for example an nftables rule matching the
+   user that runs `svm`, dropping RFC 1918 destinations) or run QEMU in a
+   network namespace. These host rules are not part of `svm` and are untested
+   here; review them before use. The default guest subnet `192.168.1.0/24`
+   also collides with many home LANs; change `network.subnet` if yours uses it.
 2. **The RTC can reveal the host timezone.** Windows guests use
    `-rtc base=localtime`, so the initial RTC reflects the host's local time.
    Windows normally sets its own timezone after boot, but a determined program
@@ -124,44 +130,40 @@ covers the pre-WARP boot window.
 
 ## WARP setup
 
-Install the WARP client and MDM policy **inside the base image**, once.
-Sessions clone the base and inherit the client and policy; the first boot
-registers the device in that session's overlay, and the registration persists
-across stop/start until the session is destroyed. See `guest/README.md` and the
-scripts in `guest/`.
+WARP is installed and registered **per session**, never in a base. A base holds
+only the installer (Windows) or the unregistered client and policy (Linux), so
+no two sessions share a Cloudflare device registration.
 
-Windows, elevated PowerShell:
+- Windows: `guest/windows/first-logon.ps1` runs at each session's first logon.
+  It writes the MDM policy (switch locked, service mode `warp`), installs the
+  staged MSI, runs `warp-cli registration new`, `mode warp`, `connect`, and then
+  deletes the MSI. Nothing to do by hand.
+- Linux: `warp-auto-connect.service` (from `scripts/configure-linux-base.sh`)
+  registers and connects on first boot of each session.
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass -Force
-.\warp-setup.ps1
-```
+Afterwards the guest has this configuration:
 
-Linux guest:
-
-```bash
-sudo ./warp-setup.sh
-```
-
-Then, in the WARP client:
-
-1. Log in / register the device.
-2. Connect.
-3. Enable **Lockdown mode** (newer clients call it **Always On**). This makes
-   the client fail closed: if WARP drops, the guest has no direct internet.
-4. Disable IPv6 on the guest NIC:
-   - Windows: `Get-NetAdapter | Disable-NetAdapterBinding -ComponentID ms_tcpip6`
+1. Registered and connected, in WARP mode.
+2. Switch locked by the MDM policy, so a process in the guest cannot turn WARP
+   off (the nearest equivalent of Lockdown / Always On for the free client).
+3. IPv6 disabled on the NIC:
+   - Windows: `first-logon.ps1` runs `Disable-NetAdapterBinding -ComponentID ms_tcpip6`.
    - Linux: the base writes `/etc/sysctl.d/99-disable-ipv6.conf` and
      `/etc/netplan/01-ethernet.yaml` with `link-local: []`. Without the netplan
      key, networkd still adds an `fe80::/64` address even when the kernel
      `disable_ipv6` sysctl is set.
-5. Verify before sealing the base.
+4. Verify inside the guest: `curl https://www.cloudflare.com/cdn-cgi/trace`
+   must show `warp=on`.
+
+Until WARP connects (the first minutes of a Windows session), the guest talks
+to the internet directly through the host's NAT. Wait for `warp=on` before
+running a sample.
 
 `svm` also sets `ipv6 = "off"` on the slirp netdev, so the guest has no IPv6
 connectivity even if its NIC still has the binding.
 
-Each session registers its own WARP device. The base contains only the client
-and MDM policy; deleting a session deletes its registration. Free-plan device
+Each session registers its own WARP device; deleting a session deletes its
+local registration. Cloudflare keeps the device record, and free-plan device
 limits apply if you create many sessions.
 
 ## Verification
@@ -250,7 +252,7 @@ the slirp caveats matter:
 | WARP will not connect | UDP blocked, clock skew, captive portal | Check host network, guest clock, WARP logs |
 | Traffic leaks when WARP drops | Lockdown/Always On not enabled | Enable it in the WARP client |
 | IPv6 still works | NIC binding not disabled | Disable `ms_tcpip6` / sysctl; keep `ipv6=false` |
-| Guest can reach host services | slirp gateway is a host alias | Stop local services, use netns/passt |
+| Guest can reach host services | Old QEMU build without patch 0004 | `./bootstrap.sh --build`, then re-run the probe |
 | Very slow throughput | slirp is single-threaded | Expected; use passt/virtio-net for performance |
 
 ## WARP is not anonymity

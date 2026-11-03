@@ -136,6 +136,7 @@ def send_text_as_keystrokes(
 
     text = normalize_text(text)
     delay_sec = max(0.005, delay_ms / 1000.0)
+    hold_sec = max(0.005, hold_time_ms / 1000.0)
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
         conn.settimeout(10.0)
@@ -146,30 +147,53 @@ def send_text_as_keystrokes(
         stream.flush()
         stream.readline()  # capabilities return
 
-        count = 0
-        for ch in text:
-            mapping = _KEY_MAP.get(ch)
-            if mapping is None:
-                continue
-
-            qcode, need_shift = mapping
-            keys: list[dict[str, str]] = []
-            if need_shift:
-                keys.append({"type": "qcode", "data": "shift"})
-            keys.append({"type": "qcode", "data": qcode})
-
+        def key_event(qcode: str, down: bool) -> None:
+            """Send one key press or release as a real PS/2 scancode."""
             payload = json.dumps({
-                "execute": "send-key",
+                "execute": "input-send-event",
                 "arguments": {
-                    "keys": keys,
-                    "hold-time": hold_time_ms,
+                    "events": [{
+                        "type": "key",
+                        "data": {
+                            "down": down,
+                            "key": {"type": "qcode", "data": qcode},
+                        },
+                    }],
                 },
             })
             stream.write(payload.encode("utf-8") + b"\n")
             stream.flush()
             stream.readline()
-            count += 1
-            if delay_sec > 0:
+
+        # Why not QMP "send-key"? It presses Shift and the character together
+        # and releases them together. Windows can then see the character
+        # before Shift (or Shift stuck on), which turns ';' into ':' and
+        # lowercase into uppercase. Sending the events one at a time, in the
+        # order a person types them, keeps the guest's modifier state exact.
+        count = 0
+        try:
+            for ch in text:
+                mapping = _KEY_MAP.get(ch)
+                if mapping is None:
+                    continue
+
+                qcode, need_shift = mapping
+                if need_shift:
+                    key_event("shift", True)
+                    time.sleep(hold_sec)
+                key_event(qcode, True)
+                time.sleep(hold_sec)
+                key_event(qcode, False)
+                if need_shift:
+                    time.sleep(hold_sec)
+                    key_event("shift", False)
+                count += 1
                 time.sleep(delay_sec)
+        finally:
+            # Never leave a modifier latched in the guest if we are interrupted.
+            try:
+                key_event("shift", False)
+            except OSError:
+                pass
 
         return count

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ from typing import Any
 
 from .config import Config
 from .identity import smbios_args
+from .smbios_tables import file_args as smbios_file_args
 from .state import Session, StateError
 
 
@@ -51,6 +53,21 @@ def is_patched(cfg: Config) -> bool:
     except OSError:
         return False
     return False
+
+
+def build_is_current(cfg: Config) -> bool:
+    """True when the QEMU binary was built from the patches now in patches/.
+
+    build-qemu.sh records one SHA-256 over all local patches in BUILD_INFO.
+    If a patch is added or edited afterwards the binary is stale and silently
+    lacks the fix, so `svm doctor` reports it.
+    """
+    info = cfg.paths.qemu_prefix / "BUILD_INFO"
+    patches = sorted((cfg.root / "patches").glob("*.patch"))
+    if not info.is_file() or not patches:
+        return False
+    digest = hashlib.sha256(b"".join(p.read_bytes() for p in patches)).hexdigest()
+    return f"local_patches_sha256={digest}" in info.read_text(encoding="utf-8").splitlines()
 
 
 def _pflash(cfg: Config, session: Session, secure_boot: bool) -> list[str]:
@@ -152,11 +169,17 @@ def render_hardware_config(
     if driver_iso is not None:
         driver_iso = Path(driver_iso).resolve()
 
+    # Optical drives report a real ASUS model. The patched ATAPI INQUIRY uses
+    # this as the product string, so Windows shows "ASUS DRW-24D5MT" instead
+    # of QEMU's stock "QEMU DVD-ROM" (or a doubled "ASUS ASUS DVD-ROM").
+    cd_model = "DRW-24D5MT"
+
     if install_iso is not None:
         add('[device "sata-cd"]')
         add('  driver = "ide-cd"')
         add('  bus = "ide.1"')
         add('  drive = "cd0"')
+        add(f'  model = {q(cd_model)}')
         add('  bootindex = "1"')
         add("")
         add('[drive "cd0"]')
@@ -172,6 +195,7 @@ def render_hardware_config(
         add('  driver = "ide-cd"')
         add('  bus = "ide.2"')
         add('  drive = "cd1"')
+        add(f'  model = {q(cd_model)}')
         add("")
         add('[drive "cd1"]')
         add(f'  file = {q(driver_iso)}')
@@ -335,7 +359,12 @@ def build_command(
     secure_boot = bool(hardware.get("secure_boot", False))
     tpm = bool(hardware.get("tpm", False))
     sandbox = bool(hardware.get("sandbox", True))
-    memory_mb = int(resources.get("memory_mb", 8192))
+    # A per-session override (svm run --memory-mb) wins over the profile; the
+    # identity was generated for the same value, so SMBIOS and RAM agree.
+    memory_mb = int(
+        session.data.get("resources", {}).get("memory_mb")
+        or resources.get("memory_mb", 8192)
+    )
     os_name = str(profile.get("os", "windows"))
 
     binary = qemu_bin(cfg)
@@ -352,7 +381,9 @@ def build_command(
 
     # usb=off disables q35's built-in 1d EHCI/UHCI pair so the generated
     # hardware.cfg can describe the complete ICH9 USB topology itself.
-    machine = f"{machine_type},accel=kvm,kernel_irqchip=on,vmport=off,usb=off"
+    # smbios-entry-point-type=64 publishes an SMBIOS 3.0 (64-bit) entry point,
+    # which Windows reports as SMBIOS 3.0 instead of 2.8.
+    machine = f"{machine_type},accel=kvm,kernel_irqchip=on,vmport=off,usb=off,smbios-entry-point-type=64"
     if secure_boot:
         machine += ",smm=on"
 
@@ -371,6 +402,11 @@ def build_command(
             # Expose AMD CPUID 0x8000001E. Without it Linux falls back to
             # legacy topology and reports 8 sockets/1 thread for a 4C/8T CPU.
             "topoext=on",
+            # Report the host's real cache sizes in CPUID. QEMU's built-in
+            # default is a 16 MiB L3, which contradicts both the SMBIOS cache
+            # tables and a real Ryzen 5 4500 (8 MiB). The identity pool picks
+            # the CPU whose caches match the host, so the two agree.
+            "host-cache-info=on",
         ]
     )
 
@@ -394,6 +430,7 @@ def build_command(
         "-uuid",
         str(identity["uuid"]),
         *smbios_args(identity),
+        *smbios_file_args(session.smbios_dir),
         "-rtc",
         f"base={'localtime' if os_name == 'windows' else 'utc'},driftfix=slew",
         "-boot",

@@ -162,7 +162,7 @@ systemd-run --user --scope \
 ```
 
 Adjust to your host. `MemoryMax` should leave headroom for the host; the default
-Linux profile uses 4 GiB and the host has ~15 GiB. Do not set `MemoryMax` below
+Linux profile uses 8 GiB and the host has ~15 GiB. Do not set `MemoryMax` below
 the guest's RAM plus QEMU overhead, or the guest will be OOM-killed.
 
 If user-scope delegation is unavailable on your distro, use a system scope or a
@@ -299,12 +299,14 @@ cat /proc/cpuinfo | grep -m1 'model name'
 systemd-detect-virt
 ```
 
-`systemd-detect-virt` should report `kvm` (it detects the hypervisor even with
-the CPUID bit hidden, via other hints). That is expected; the goal is to defeat
-user-mode anti-VM checks, not a determined analyst.
+With this build `systemd-detect-virt` reports `none` (measured on Ubuntu 24.04,
+3 Nov 2026): the CPUID hypervisor bit, the KVM signature, the DMI strings and
+the SMBIOS "virtual machine" flag are all absent. If it reports `kvm`, the
+patched QEMU or the `-cpu` flags are not in effect; run `svm doctor`.
 
-PCI IDs: the patch changes Red Hat vendor IDs to Intel, but the q35 chipset is
-still an Intel emulation on an AMD host. Compare `lspci -nn` with the SMBIOS
+PCI IDs: the patch changes most Red Hat vendor IDs to Intel, but not the QXL
+graphics card, which still reports `1b36:0100`, and the q35 chipset is still an
+Intel emulation on an AMD host. Compare `lspci -nn` with the SMBIOS
 CPU vendor; a mismatch is a tell for deep checks.
 
 ## Verify the host after a run
@@ -325,7 +327,7 @@ sha256sum images/base/*.qcow2
 Run it before and after a session; the hash should not change. The overlay is
 where all writes go.
 
-A persistent session contains guest data. Delete it with `svm destroy <id>`
+A session started with `--keep` contains guest data. Delete it with `svm destroy <id>`
 when done.
 
 ## Incident response

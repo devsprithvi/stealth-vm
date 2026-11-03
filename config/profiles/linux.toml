@@ -1,6 +1,11 @@
-# Ubuntu desktop guest. The 4 GiB memory and 500 GB (decimal) disk sizes
+# Ubuntu desktop guest. The 8 GiB memory and 500 GB (decimal) disk sizes
 # match entries in hardware.toml. 500 GB is the labelled capacity of the
 # emulated SSD; the guest correctly sees ~465.7 GiB.
+#
+# 12 vCPUs = the host's thread count, which selects the Ryzen 5 4500 identity
+# (6C/12T). That is the only identity whose cache sizes match the host CPU, so
+# CPUID cache leaves and the SMBIOS cache tables agree. Use fewer vCPUs only if
+# you accept a cache-size mismatch (see docs/ANTI-DETECTION.md).
 #
 # Input is PS/2, not USB HID. q35 provides an i8042 controller, so the guest
 # reports a normal PS/2 keyboard and mouse instead of a QEMU USB tablet.
@@ -8,13 +13,12 @@
 os = "linux"
 base = "linux"
 
-[general]
-# A desktop VM keeps its state across viewer close/stop/start. Use
-# `svm run --fresh` or `svm destroy` when a disposable session is wanted.
-auto_destroy = false
+# Disposable like every other profile: each launch is a new machine and the
+# session is wiped when the viewer closes. Keep one on purpose with
+# `svm run --fresh --keep`, then reopen it with `svm run <id>`.
 
 [resources]
-vcpus = 8
+vcpus = 12
 memory_mb = 8192
 disk_gb = 500
 

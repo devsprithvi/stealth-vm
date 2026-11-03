@@ -1,59 +1,69 @@
 #!/usr/bin/env bash
-# Clickable launcher: resume the newest session or create the first one.
+# Clickable launcher. Every launch is a brand-new machine: a new overlay on the
+# sealed base, a new hardware identity, and (for Windows) a new SID, machine
+# GUID, computer name and volume serial. The session is deleted when the viewer
+# closes.
+#
+# Usage: svm-gui [--profile NAME] [--keep] [--resume]
+#   --profile NAME  linux (default) or win10; SVM_PROFILE sets the default
+#   --keep          do not delete the session when the viewer closes
+#   --resume        reopen the newest kept session instead of creating one
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 profile="${SVM_PROFILE:-linux}"
+keep=0
+resume=0
 export GDK_BACKEND="${GDK_BACKEND:-x11}"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --profile) profile="${2:?--profile needs a value}"; shift 2 ;;
+        --keep) keep=1; shift ;;
+        --resume) resume=1; shift ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+done
 
 notify() {
     command -v notify-send >/dev/null 2>&1 && notify-send "Stealth VM" "$1" || true
 }
 
-if ! sessions="$(./bin/svm list --json 2>/dev/null)"; then
-    notify "Could not read the session list."
-    exit 1
+if [ "$resume" -eq 1 ]; then
+    if ! sessions="$(./bin/svm list --json 2>/dev/null)"; then
+        notify "Could not read the session list."
+        exit 1
+    fi
+    selection="$(
+        printf '%s' "$sessions" | python3 -c '
+import json, sys
+sessions = [s for s in json.load(sys.stdin) if s.get("profile") == sys.argv[1]]
+running = [s for s in sessions if s.get("status") == "running"]
+pool = running or sessions
+if not pool:
+    print("none", "-")
+else:
+    chosen = max(pool, key=lambda s: s.get("created_at", ""))
+    print("running" if running else "stopped", chosen["id"])
+' "$profile"
+    )"
+    read -r mode session_id <<<"$selection"
+    case "$mode" in
+        running) ./bin/svm attach "$session_id" || { notify "Could not open $session_id."; exit 1; } ;;
+        stopped) ./bin/svm run --keep "$session_id" || { notify "Could not start $session_id."; exit 1; } ;;
+        *) notify "No kept $profile session to resume."; exit 1 ;;
+    esac
+    exit 0
 fi
 
-selection="$(
-    printf '%s' "$sessions" | python3 -c '
-import json, sys
-sessions = json.load(sys.stdin)
-running = [s for s in sessions if s.get("status") == "running"]
-if running:
-    chosen = max(running, key=lambda s: s.get("created_at", ""))
-    print("running", chosen["id"])
-elif sessions:
-    chosen = max(sessions, key=lambda s: s.get("created_at", ""))
-    print("stopped", chosen["id"])
-else:
-    print("none", "-")
-'
-)"
-read -r mode session_id <<<"$selection"
-
-case "$mode" in
-    running)
-        if ! ./bin/svm attach "$session_id"; then
-            notify "Could not open the SPICE viewer for $session_id."
-            exit 1
-        fi
-        ;;
-    stopped)
-        if ! ./bin/svm run "$session_id"; then
-            notify "Could not start $session_id."
-            exit 1
-        fi
-        ;;
-    none)
-        if ! ./bin/svm run --fresh --profile "$profile"; then
-            notify "Could not create a new $profile session."
-            exit 1
-        fi
-        ;;
-    *)
-        notify "Unexpected session state: $mode"
-        exit 1
-        ;;
-esac
+# Fresh machine. --ephemeral wipes it on exit; --keep leaves it for --resume.
+if [ "$keep" -eq 1 ]; then
+    lifetime=(--keep)
+else
+    lifetime=(--ephemeral)
+fi
+if ! ./bin/svm run --fresh --profile "$profile" "${lifetime[@]}"; then
+    notify "Could not start a new $profile machine."
+    exit 1
+fi

@@ -1,174 +1,183 @@
-# svm — stealth Linux VMs
+# svm: a malware-analysis VM that looks like a real PC
 
-`svm` runs an Ubuntu 24.04 XFCE desktop inside QEMU/KVM with a self-consistent
-hardware identity, Cloudflare WARP inside the guest, and Firefox. Each session
-is a qcow2 overlay on a sealed base image; state persists across stop/start,
-and destroying the session wipes everything it wrote.
+`svm` runs Windows 10 or Ubuntu desktops in QEMU/KVM with a hardware identity
+that reads like an ordinary ASUS/AMD desktop. It is built for **malware
+analysis and isolated software testing**: evasive samples check whether they
+are inside a virtual machine and change behaviour when they are, so the
+sandbox has to pass those checks for the analyst to see what the sample really
+does.
 
-The guest gets no shared folders, clipboard sharing, USB passthrough, guest
-agent, or host port forward. The host hardware identity is not handed to the
-guest. This is built for **isolated software testing and malware analysis**,
-not for bypassing anti-cheat in online games. There is no such thing as 100%
-stealth; see [Limits](#limits) before relying on it.
+Each session is a disposable qcow2 overlay on a sealed base image with a freshly
+generated identity. Nothing a sample does is written to the base. Destroy the
+session and everything it wrote is gone; keep it and the same machine resumes.
+
+> **Scope.** Use this on systems you own or are authorized to test, for
+> analysis, research and defensive work. It is not a tool for bypassing
+> online-game anti-cheat or any service's terms; that gets accounts banned and
+> is not what it is built or tested for.
+>
+> **No VM is 100% undetectable.** The tests in this repository find no tell in
+> the checks they cover, and the known gaps are listed under [Limits](#limits).
+> Read them before relying on this for a sample that targets VM detection.
 
 ## What you get
 
-- Ubuntu 24.04.5 XFCE desktop with a normal panel, Thunar, terminal, task
-  manager, screenshot tool, notifications, power manager, and Firefox 159.
-- Cloudflare WARP `2026.8.2115.0`, connected before the desktop is useful,
-  with a local MDM policy for Always On / locked switch.
-- An AMD Ryzen 3 4100 4C/8T CPU identity, 4 GiB RAM, a 500 GB-class WD SSD,
-  an ASUS/MSI B550 board, and an AMI BIOS. The generator prefers the CPU model
-  matching the host CPUID family/model/stepping, so KVM's microcode revision
-  stays consistent with the emulated CPU.
-- PS/2 keyboard and mouse, no USB HID tablet. The guest sees no `kvm` module.
-- A 500,000,000,000-byte disk (465.7 GiB visible), reported as a non-rotating
-  SSD.
-- Per-session SMBIOS UUID, serials, MAC, hostname, disk serial, and NVRAM.
-- Persistent Firefox profile and WARP registration inside each overlay.
-
-## Stack
-
-| Layer | Choice | Why |
+| | Windows 10 (`win10`) | Ubuntu 24.04 (`linux`) |
 |---|---|---|
-| Hypervisor | QEMU 10.2.2 + [`zhaodice/qemu-anti-detection`](https://github.com/zhaodice/qemu-anti-detection) | SMBIOS, ACPI, PCI ID, device-name, and CPUID patches. Built into `runtime/qemu`, never installed over the distro QEMU. Local patches add a desktop chassis, DDR4 DIMM details, and AMI-style ACPI OEM IDs. |
-| Firmware | OVMF (distro `ovmf`) | UEFI, Secure Boot optional. |
-| Management | This Python CLI + pure QEMU | No libvirt state. One directory per session. |
-| Display | SPICE + QXL over a Unix socket | No TCP listener and no host window required for headless runs. |
-| Network | QEMU user-mode NAT + WARP in the guest | No bridge, no host ports; WARP hides the host public IP from destinations. |
-| Base | Ubuntu 24.04.5, installed once | Sealed read-only; every session is an overlay. |
+| Identity | ASUSTeK PRIME B550-PLUS, AMI BIOS, Ryzen 5 4500 (6C/12T) | same family of identities, regenerated per session |
+| Memory / disk | 8 GiB (one DDR4 DIMM) / 500 GB SSD (465.7 GiB) | same |
+| Network | Intel e1000e behind QEMU user-mode NAT, Cloudflare WARP inside the guest | same |
+| Input / display | PS/2 keyboard and mouse, SPICE + QXL, 1920x1080 | same |
+| Guest integration | none: no agent, clipboard, shared folders or USB passthrough | none |
+| Default lifetime | disposable (wiped when closed) | disposable (wiped when closed) |
+| Validated | yes, see [Validation](#validation) | yes |
+
+Every run is a new machine: new UUID, serials, MAC address, hostname, disk
+serial and NVRAM, and inside Windows a new SID, MachineGuid, computer name,
+NTFS volume serial, user profile and WARP registration. Nothing installed or
+used in an earlier run is present. [`docs/FRESHNESS.md`](docs/FRESHNESS.md)
+lists exactly what is regenerated, what is not, and how to verify it. See [`docs/ANTI-DETECTION.md`](docs/ANTI-DETECTION.md) for how the
+identity is built, why the values are cross-consistent, and what the upstream
+anti-detection patch does.
+
+## How the stealth works
+
+1. **Patched QEMU.** QEMU 10.2.2 is built with
+   [`zhaodice/qemu-anti-detection`](https://github.com/zhaodice/qemu-anti-detection)
+   (pinned by commit and SHA-256), which renames the QEMU, Red Hat and Bochs
+   strings and IDs that guests and malware look for. Four local patches in
+   `patches/` fix what that patch leaves inconsistent or open (desktop chassis,
+   DDR4 DIMMs, AMI ACPI OEM IDs, host-loopback block, no WAET table).
+2. **A coherent identity.** `svm` generates SMBIOS, CPU, cache, memory, disk and
+   MAC values that agree with each other and with the host CPU, because
+   samples cross-check them.
+3. **Nothing to find in the guest.** No guest additions, agent or shared
+   folders; the guest sees no `kvm` module and no hypervisor CPUID bit.
+4. **Probes to prove it.** `guest/stealth-probe.ps1` and `guest/stealth-probe.sh`
+   report what code inside the guest can see.
 
 ## Requirements
 
-- x86_64 Linux host with KVM (`/dev/kvm`). Tested on Ubuntu 26.04, kernel 7.0.
-- ~15 GiB host RAM recommended (the Linux guest uses 4 GiB).
-- ~40 GiB free disk for the base plus a session.
-- `sudo` for the one-time build and base provisioning.
-- [`uv`](https://docs.astral.sh/uv/) for the Python CLI. `bin/svm` calls
-  `uv run`; install it if missing:
-  ```bash
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  ```
-- `virt-viewer` for the SPICE window (`remote-viewer`).
-- The base image is already built on this machine. Building from scratch also
-  needs the Ubuntu ISO and OVMF.
+- x86_64 Linux host with KVM (`/dev/kvm`) and an AMD CPU. The identity pool is
+  matched to the host CPU; an Intel host falls back to the Intel pool.
+- 12 host threads and 16 GiB RAM recommended. The default profiles give the
+  guest 12 vCPUs and 8 GiB (see [Profiles](#profiles)).
+- About 40 GiB free disk per base plus sessions.
+- `sudo` once, for the build dependencies.
+- [`uv`](https://docs.astral.sh/uv/) for the Python CLI, and `virt-viewer`
+  (`remote-viewer`) for the SPICE window.
 
 ## Quick start
 
 ```bash
 cd ~/stealth-vm
+sudo ./bootstrap.sh                 # first time only: dependencies + patched QEMU
+./bin/svm doctor                    # host, QEMU patch set, OVMF, viewer, bases
 
-# Check the host, patched QEMU, OVMF, viewer, and base.
-./bin/svm doctor
-
-# Boot a new persistent Linux session. The viewer opens immediately.
-./bin/svm run --fresh --profile linux
-
-# Leave the desktop with the normal XFCE shutdown button, or close the
-# viewer. The session is kept and can be resumed:
-./bin/svm list
-./bin/svm run 20261102-105914-c472
+./bin/svm run --fresh --profile win10     # disposable Windows desktop
+./bin/svm run --fresh --profile linux     # disposable Linux desktop
 ```
 
-The Linux profile sets `auto_destroy = false`, so a normal `svm run` keeps the
-overlay and its state. To delete one session, use `svm destroy <id>`. To make a
-one-shot run that is wiped when the viewer closes, add `--ephemeral`:
+Close the viewer or shut the guest down from inside. The session is deleted.
+The desktop launcher (`bin/svm-gui`) does the same: every click starts a new
+machine; it never resumes an old one. To keep a session on purpose:
 
 ```bash
-./bin/svm run --fresh --profile linux --ephemeral
+./bin/svm run --fresh --profile win10 --keep   # keep it after closing
+./bin/svm list                      # sessions and their state
+./bin/svm run <id>                  # resume a kept session
+./bin/svm destroy <id>              # wipe disk, NVRAM, identity and logs
 ```
 
-## Clickable launcher
+Flags that change lifetime: `--ephemeral` (wipe on exit), `--keep` / `--persist`
+(never wipe).
 
-Install the desktop entry once:
+## Analysing a sample
+
+1. Start a fresh session: `./bin/svm run --fresh --profile win10`.
+2. Get the sample into the guest without a shared folder. Download it inside
+   the guest, or attach it as a read-only CD:
+   `./bin/svm run --fresh --profile win10 --cdrom sample.iso`
+   (build the ISO with `xorriso -as mkisofs -V SAMPLE -J -r -o sample.iso dir/`).
+3. Type text into the guest through emulated PS/2 hardware keystrokes, with no
+   clipboard channel: `./bin/svm paste 'some command'` (omit the text to type
+   the host clipboard).
+4. When finished, `./bin/svm destroy <id>`. The base is untouched, so the next
+   session starts clean with a different identity.
+
+**Network exposure.** The guest reaches the Internet through Cloudflare WARP, so
+the sample sees a WARP egress address, not your IP. The guest cannot reach host
+loopback services (blocked in the QEMU patch) and has no inbound path. QEMU's
+user-mode networking still lets the guest connect to whatever your host can,
+including devices on your LAN. See [`docs/NETWORK.md`](docs/NETWORK.md) for the
+risk and mitigations before running worms or anything that scans networks.
+
+## Validation
+
+Run a probe inside the guest to see what a sample could see. Both print
+`[TELL]` for each giveaway and a summary at the end.
 
 ```bash
-./scripts/install-launcher.sh
+xorriso -as mkisofs -V PROBE -J -r -o /tmp/probe.iso guest/
+./bin/svm run --fresh --profile win10 --keep --cdrom /tmp/probe.iso
 ```
 
-It creates `~/.local/share/applications/svm.desktop` and a copy on the desktop.
-Clicking **Stealth VM**:
+- Windows: open PowerShell, run `powershell -ep bypass -f D:\stealth-probe.ps1`
+  (the drive letter can be `D:` or `E:`; check with `gdr`).
+- Linux: `sudo mount /dev/sr0 /mnt && sudo bash /mnt/stealth-probe.sh`.
+- Isolation test: start `python3 -m http.server 9999 --bind 127.0.0.1` on the
+  host and add `-HostPort 9999` (Windows) or `--host-port 9999` (Linux). The
+  probe must say the port is not reachable.
 
-- attaches to the newest running session, or
-- resumes the newest stopped session, or
-- creates a new Linux session if none exists.
+Results on 3 Nov 2026 with the patch set in this repository:
 
-The wrapper is `bin/svm-gui`; it uses `svm list --json` and then calls
-`svm attach` or `svm run`. The viewer opens as soon as the SPICE socket is
-ready.
+| | Windows 10 | Ubuntu 24.04 |
+|---|---|---|
+| Tells found | 2: PCI vendor `1B36` and "Microsoft Basic Display Adapter" (both the QXL GPU) | 2: PCI vendor `1b36` and the `qxl` kernel module (same GPU) |
+| Identity, CPU, caches, memory, disk, NIC, optical drive | consistent | consistent |
+| Hypervisor bit, `systeminfo`, `systemd-detect-virt` | clean | clean (`none`) |
+| Host loopback reachable | no | no |
+| WARP | connected | connected |
 
-## Build the base from scratch
-
-The base is installed once, provisioned in a chroot, then sealed read-only.
-
-```bash
-sudo ./bootstrap.sh
-
-# 1. Install Ubuntu 24.04.5. The unattended seed is optional; an interactive
-#    install works too. Use the Linux profile so the disk size matches.
-./bin/svm base create linux \
-  --iso images/iso/ubuntu-24.04.5-live-server-amd64.iso \
-  --driver-iso images/iso/seed.iso \
-  --profile linux --headless --yes
-
-# 2. Apply the reproducible desktop/WARP/Firefox configuration, clean the
-#    image, and seal it. This refuses to run while any session exists.
-sudo ./scripts/provision-linux-base.sh
-
-# 3. Boot the result.
-./bin/svm run --fresh --profile linux
-```
-
-`scripts/configure-linux-base.sh` is the canonical definition of the base. It
-installs the XFCE desktop, Firefox from Mozilla's APT repository, WARP from
-Cloudflare's APT repository, AMD microcode, and the desktop panel packages. It
-removes cloud-init, VMware/SPICE agents, snapd, Intel microcode, apport,
-pollinate, sosreport, and other server/telemetry packages; configures DHCP,
-IPv6 disablement, hostname-from-SMBIOS, WARP Always On, autologin, passwordless
-sudo, Firefox policies, and the `desktop-<uuid6>` hostname service.
-
-The base is sealed with mode `0444`. Session overlays point at it, so do not
-modify a base while any overlay exists. `svm` refuses to create a new base over
-a running session, and the provisioning script refuses to run if `vms/` has
-any session directory.
+Not covered by the probes: timing checks, GPU behaviour and driver-level
+checks. The full table with every check is in
+[`docs/ANTI-DETECTION.md`](docs/ANTI-DETECTION.md#validation).
 
 ## Profiles
 
-| Profile | OS | vCPU | RAM | Disk | TPM / Secure Boot | Use |
-|---|---|---:|---:|---:|---|---|
-| `linux` | Ubuntu 24.04 XFCE | 8 | 4 GiB | 500 GB | no / no | Default; persistent desktop |
-| `win10` | Windows 10 | 8 | 8 GiB | 500 GB | no / no | Deferred; needs a working Windows base |
-| `win10-perf` | Windows 10 | 12 | 8 GiB | 500 GB | no / no | Deferred; heavy installers |
-| `win11` | Windows 11 | 8 | 8 GiB | 500 GB | yes / yes | Experimental and deferred; TPM is detectable |
+| Profile | OS | vCPU | RAM | Disk | TPM / Secure Boot | Lifetime |
+|---|---|---:|---:|---|---|---|
+| `win10` | Windows 10 | 12 | 8 GiB | 500 GB | no / no | disposable |
+| `win10-perf` | Windows 10 | 12 | 8 GiB | 500 GB | no / no | disposable |
+| `linux` | Ubuntu 24.04 | 12 | 8 GiB | 500 GB | no / no | disposable |
+| `win11` | Windows 11 | 8 | 8 GiB | 500 GB | yes / yes | experimental; the emulated TPM is detectable |
 
-Disk sizes are decimal GB, matching the number printed on a real SSD label.
-The Linux guest therefore sees 465.7 GiB for a 500 GB disk.
-
-The 8-vCPU identity pool contains 4C/8T Ryzen parts. On this host the generator
-selects the Ryzen 3 4100 because its family/model/stepping matches the host,
-keeping the guest microcode revision consistent. On a different host vendor or
-CPUID, it falls back to the configured identity that matches the vCPU count.
-The 12-vCPU profile selects a 6C/12T Ryzen 5 3600.
+Why 12 vCPUs: the host's Ryzen 5 4500 is the only identity whose cache sizes
+match the real chip, and KVM passes cache and microcode details through. With
+fewer vCPUs the generator must pick a different CPU whose advertised cache
+disagrees with what CPUID reports. The cost is that the guest can use every host
+thread; lower `vcpus` in the profile if the host becomes sluggish, and accept
+the mismatch described in
+[`docs/ANTI-DETECTION.md`](docs/ANTI-DETECTION.md#the-svm-layer-srcsvm).
 
 ## Commands
 
 ```text
-svm doctor                     check host, patched QEMU, OVMF, viewer, bases
+svm doctor                     check host, patched QEMU (and that it matches patches/), OVMF, viewer, bases
 svm build                      rebuild patched QEMU (deps must be installed)
-svm info                       show paths and installed bases
-svm version                    versions + whether QEMU is patched
-svm paths                      print every path used
+svm info | version | paths     show paths, versions, whether QEMU is patched
 
 svm new [-p PROFILE] [-b BASE] [--dry-run]
 svm run [SESSION] [--fresh] [-p PROFILE] [-b BASE] [--keep|--persist|--ephemeral]
-        [--headless] [--dry-run] [--viewer EXE] [--no-sandbox] [--debug]
+        [--headless] [--cdrom ISO] [--dry-run] [--viewer EXE] [--no-sandbox] [--debug]
 svm list [--json]
-svm attach SESSION [--viewer EXE]
-svm stop SESSION
+svm attach SESSION             open a viewer for a running session
+svm stop SESSION               ask the guest to power down, then stop QEMU
 svm destroy SESSION [--force]
-svm nuke [--force]
-svm gc [--days N]
-svm identity SESSION
+svm nuke [--force]             delete every session (bases untouched)
+svm gc [--days N]              delete old stopped sessions
+svm identity SESSION           show the generated hardware identity
+svm paste [TEXT] [-s SESSION]  type text via emulated PS/2 keystrokes
 
 svm base list
 svm base create NAME --iso FILE [-p PROFILE] [--driver-iso FILE]
@@ -176,259 +185,117 @@ svm base create NAME --iso FILE [-p PROFILE] [--driver-iso FILE]
 svm base delete NAME [--force]
 ```
 
-Typical loop:
+## Base images
+
+A base is installed once, then sealed read-only (`0444`). Every session is an
+overlay on it, so never modify a base while sessions exist; `svm` refuses to.
+
+**Linux.** `scripts/configure-linux-base.sh` is the definition of the Linux base:
+desktop, Firefox, Cloudflare WARP with an always-on policy, per-session
+hostname from the SMBIOS UUID, and removal of installer, cloud and telemetry
+packages.
 
 ```bash
-./bin/svm run --fresh --profile linux   # new persistent overlay + identity
-# use the desktop, then shut down or close the viewer
-./bin/svm list                          # session remains, state intact
-./bin/svm run <id>                      # resume the same overlay
-./bin/svm destroy <id>                  # wipe disk, NVRAM, identity, logs
+sudo ./scripts/provision-linux-base.sh   # configure and seal the installed base
 ```
 
-`svm stop` asks the guest to power down and then stops QEMU if needed.
-`svm attach` opens a viewer for an already-running session without stopping it.
-`svm list --json` is the machine-readable form used by the launcher.
+**Windows.** `guest/windows/` holds the answer files and scripts. One command
+installs Windows from the ISO, enters Audit mode (no user ever signs in), and
+runs `sysprep /generalize`, so every session gets a new SID, MachineGuid and
+computer name on first boot. WARP is staged but not installed or registered in
+the base.
+```bash
+./scripts/build-win10-base.sh        # unattended, about 30-40 minutes
+```
+The previous base is moved to `images/base/backup/`. See
+[`guest/README.md`](guest/README.md) and [`docs/FRESHNESS.md`](docs/FRESHNESS.md).
+
+## Configuration
+
+`config/defaults.toml` holds shared values; profiles in `config/profiles/`
+override only what they change. Unsupported values are rejected rather than
+silently ignored: only `q35`, `ovmf`, `sata`, `spice`, `qxl` and
+`network.mode = "user"` are implemented.
+
+`config/hardware.toml` is the identity pool: CPUs (with cache sizes), boards,
+memory kits, disks and MAC OUIs. RAM and disk sizes must match a profile
+exactly, and every OUI must match the IEEE registry. Add entries there rather
+than changing the generator.
 
 ## Folder layout
 
 ```text
 ~/stealth-vm/
-├── bin/svm                   CLI entry point (uv)
-├── bin/svm-gui               clickable launcher wrapper
-├── bootstrap.sh              one-time dependency install + QEMU build
-├── config/
-│   ├── defaults.toml         shared defaults
-│   ├── hardware.toml         CPU/board/RAM/disk/MAC identity pools
-│   └── profiles/             linux, win10, win10-perf, win11
-├── desktop/svm.desktop       desktop-entry template
-├── docs/                     architecture, network, hardening, build notes
-├── guest/                    WARP setup notes and scripts
-├── images/
-│   ├── iso/                  installer ISOs (not wiped)
-│   └── base/                 sealed base disk + NVRAM
-├── scripts/
-│   ├── build-qemu.sh         pinned QEMU + patch build
-│   ├── configure-linux-base.sh  in-chroot base definition
-│   ├── provision-linux-base.sh  host-side mount/chroot/seal wrapper
-│   └── install-launcher.sh   install the desktop entry
-├── src/svm/                  Python CLI
-├── vms/                      per-session overlays (persistent until destroyed)
-├── runtime/qemu/             patched QEMU build (no system install)
-├── build/                    downloads and unpacked source
-└── logs/
+├── bin/svm, bin/svm-gui      CLI entry point and clickable launcher
+├── bootstrap.sh              one-time dependencies + patched QEMU build
+├── config/                   defaults, identity pool, profiles
+├── docs/                     architecture, anti-detection, network, hardening, build
+├── guest/                    stealth probes, Windows base sources (guest/windows), guest notes
+├── images/iso, images/base   installer ISOs, sealed bases (+ backups)
+├── patches/                  local QEMU patches, applied after the upstream one
+├── scripts/                  QEMU build, Windows/Linux base builds, freshness check, launcher install
+├── src/svm/                  Python CLI (cli, qemu, state, identity, smbios_tables, paste)
+├── runtime/qemu/             patched QEMU (never installed system-wide)
+├── vms/                      per-session overlays
+└── build/, logs/
 ```
 
-A session directory contains:
-
-```text
-vms/20261102-105914-c472/
-├── disk.qcow2     overlay; backing file is the sealed base
-├── vars.fd        per-session OVMF NVRAM
-├── tpm/           per-session swtpm state (win11 only)
-├── hardware.cfg   generated QEMU -readconfig file
-├── qmp.sock       QMP control socket (0700 directory)
-├── qemu.pid
-├── qemu.log
-└── session.json   identity + paths
-```
-
-Deleting that directory is the whole cleanup. Nothing is written back to the
-base image.
-
-## Configuration
-
-`config/defaults.toml` has the shared values. Profiles override them with the
-same section names.
-
-```toml
-[general]
-default_profile = "linux"
-auto_destroy = true
-viewer = "remote-viewer"
-
-[resources]
-vcpus = 8
-memory_mb = 4096
-disk_gb = 500          # decimal GB; 465.7 GiB in the guest
-
-[display]
-backend = "spice"
-video = "qxl"
-audio = false
-
-[input]
-mode = "ps2"           # ps2 avoids QEMU's USB HID tablet identity
-
-[network]
-mode = "user"          # QEMU slirp; no bridge, no host forwards
-nic = "e1000e"
-subnet = "192.168.1.0/24"
-gateway = "192.168.1.1"
-dhcp_start = "192.168.1.100"
-dns = "192.168.1.2"
-ipv6 = false
-
-[hardware]
-machine = "q35"
-firmware = "ovmf"
-secure_boot = false
-tpm = false
-disk_bus = "sata"
-sandbox = true
-```
-
-`config/profiles/linux.toml` overrides `auto_destroy = false` so desktop state
-persists. A profile only needs the values it changes. Unsupported values are
-rejected instead of silently ignored: only `q35`, `ovmf`, `sata`, `spice`,
-`qxl`, and `network.mode = "user"` are implemented today.
-
-To add a hardware identity, add an entry to `config/hardware.toml` with a RAM
-size and disk capacity that exactly match a profile. The generator fails with a
-clear message if no match exists.
-
-## How the stealth layer works
-
-Per session, `svm` generates a self-consistent identity from
-`config/hardware.toml`:
-
-- SMBIOS types 0/1/2/3/4/17 (BIOS, system, board, chassis, CPU, RAM).
-- System UUID, board/chassis/CPU/RAM serials, disk model + serial + firmware.
-- A real-vendor MAC OUI (never `52:54:00`, `00:0C:29`, `00:50:56`, `08:00:27`,
-  `00:1C:42`, or `00:15:5D`).
-- A Linux desktop hostname derived from the SMBIOS UUID:
-  `desktop-<first6>`. `/etc/machine-id` is empty in the base, so systemd
-  generates a fresh machine ID in each overlay.
-- CPU vendor/family/model/stepping and brand string matching the host vendor,
-  the profile's vCPU count, and preferably the host CPUID family/model.
-- `-cpu host,kvm=off,hypervisor=off`, `topoext=on`, no Hyper-V enlightenments,
-  `vmport=off`, and the anti-detection patch's ACPI/PCI/device renames.
-- q35 topology with ICH9 AHCI, EHCI/UHCI, HDA audio, e1000e NIC, QXL VGA, and
-  PCIe root ports — modeled on QEMU's own `docs/config/q35-emulated.cfg`, not a
-  minimal VM.
-- SATA IDENTIFY word 217 set to `1`, so Linux reports the emulated WD/Samsung
-  SSD as non-rotating (`ROTA=0`).
-- PS/2 input by default. q35 provides an i8042 controller; the guest reports an
-  `ASUS PS/2 Mouse`, not `QEMU Tablet`.
-- Guest-side `kvm` modules blacklisted. The guest sees no `kvm` module loaded.
-
-No shared folders, no clipboard sharing, no USB redirection, no guest agent,
-no host port forwards. The SPICE socket is a Unix socket inside a `0700`
-directory. QEMU runs with a seccomp sandbox by default.
-
-## Network and WARP
-
-The guest is behind QEMU user-mode NAT:
-
-```text
-guest 192.168.1.100 → slirp 192.168.1.1 → host socket → WARP → Cloudflare → destination
-```
-
-- Destinations see a Cloudflare WARP egress IP, not your home IP.
-- Your host sees only WireGuard/HTTPS traffic to Cloudflare.
-- Cloudflare sees your host's public IP and the WARP device registration.
-  WARP is a privacy proxy, not an anonymity network.
-- IPv6 is disabled in slirp and in the guest. The netplan configuration also
-  sets `link-local: []`, so networkd does not add an `fe80::/64` address to the
-  guest NIC.
-- There are no host port forwards and no inbound path to the guest.
-
-The WARP client and MDM policy are installed **inside the base**. The first
-boot registers the device in that session's overlay; the registration persists
-across stop/start and is deleted with the session. The local MDM policy sets
-`switch_locked=true`, `auto_connect=0`, and `service_mode=warp`.
-`warp-auto-connect.service` starts `warp-svc`, applies the policy, registers
-the overlay if needed, and connects. If WARP is unavailable, the guest falls
-back to direct NAT unless Lockdown/Always On is enforced; the local policy is
-intended to fail closed.
-
-Two caveats are documented in full in `docs/NETWORK.md`:
-
-- The slirp gateway `192.168.1.1` is a host alias. The guest can reach host
-  loopback services at that address. Stop sensitive local services while a
-  guest runs, or use a network namespace / passt with `map-host-loopback=none`.
-- The guest RTC is UTC for Linux. Windows profiles use localtime, which can
-  reveal the host timezone through the initial RTC.
-
-## Passwordless guest
-
-The Linux guest is intentionally passwordless:
-
-- `user` has an empty shadow entry.
-- LightDM autologins to XFCE with no prompt.
-- `sudo` is passwordless for `user`.
-- No password, hash, or key file is stored in the project. The autoinstall
-  seed is generated from passwordless `images/iso/user-data`.
-
-This is an isolated analysis VM, not a model for a real workstation. Do not
-copy the passwordless configuration to a host you care about.
+A session directory (`vms/<id>/`) holds `disk.qcow2`, `vars.fd`, `smbios/`,
+`hardware.cfg`, the QMP and SPICE sockets, `qemu.log` and `session.json`.
+Deleting it is the whole cleanup.
 
 ## Limits
 
-- **No stack is 100% undetectable.** This defeats common user-mode checks
-  (DMI/SMBIOS strings, the `hypervisor` CPUID bit, QEMU/Red Hat PCI IDs, device
-  names, disk model, MAC OUI) and many anti-VM installers. Kernel anti-cheat,
-  TPM attestation, timing analysis, memory forensics, and targeted sandbox
-  evasion can still detect it.
-- **QXL is the weakest device.** The guest reports
-  `Red Hat, Inc. QXL paravirtual graphic card [1b36:0100]`. The patch set does
-  not turn QXL into a real GPU. GPU passthrough is the only strong fix; this
-  host has a single RTX 3060 in use, so passthrough is unavailable here.
-- **q35 is an Intel chipset.** On an AMD host the CPU identity is AMD but the
-  chipset PCI IDs are Intel. Most software does not compare them; sophisticated
-  checks can.
-- **e1000e on a B550 board** is plausible for many boards but not universal.
-  A determined check can compare the NIC model to the board.
-- **Disk capacity is decimal 500 GB.** The guest sees 465.7 GiB, like a real
-  500 GB SSD. A check that compares the model's marketing capacity to the
-  reported size can still notice unusual choices.
-- **CPU cache and feature details come from the host.** `-cpu host` keeps the
-  host's feature flags and cache topology; only family/model/stepping and the
-  brand string are overridden. A check that compares cache size to the CPU
-  model can notice.
-- **Timing is not hidden.** RDTSC/TSC timing can reveal KVM. The optional
-  host-kernel RDTSC patch is documented in `docs/HARDENING.md`; it is not
-  default because it requires rebuilding the host kernel.
-- **The Windows profiles are deferred.** The patched OVMF currently fails to
-  boot the Windows ISO and falls back to PXE. Linux is the working profile.
-- **The hypervisor is in your trusted computing base.** You are applying a
-  third-party patch to QEMU to contain untrusted code. Read the patch, build
-  from the pinned tarball, and keep the build under `runtime/` so you can
-  delete it.
-- **Guest RAM is not guaranteed zeroed** after QEMU exits. Use encrypted swap,
-  disable core dumps, and reboot between high-risk runs.
-- **Not for online-game anti-cheat.** That violates the game's ToS and gets
-  accounts banned. Use it on software you are allowed to test.
+Ordered by how easily a sample can use them:
+
+1. **Timing.** `RDTSC` and `CPUID` latency reveal KVM. Not addressed; an optional
+   host-kernel patch is described in `docs/HARDENING.md`.
+2. **GPU.** The guest sees the QXL card (`1b36:0100`). Windows shows "Microsoft
+   Basic Display Adapter" with no VRAM, Linux loads `qxl`. The strong fix is
+   GPU passthrough, which needs a second GPU (this host has one).
+3. **Firmware vendor.** OVMF identifies itself as "EDK II" and Windows stores
+   `Ubuntu distribution of EDK II` as the BIOS version. A custom OVMF build is
+   required to change it.
+4. **Chipset.** Intel Q35/ICH9 IDs sit under an AMD/ASUS identity.
+5. **Windows computer name and SID** come from the base, not the session.
+6. **Fresh install.** No browsing history, recent files or installed programs.
+7. **The WARP adapter** is visible, and some samples treat a VPN as a sandbox hint.
+8. **LAN reachability and guest memory.** User-mode NAT can reach the host's LAN,
+   and guest RAM is not guaranteed zeroed after QEMU exits (see `docs/NETWORK.md`
+   and `docs/HARDENING.md`).
+9. **The hypervisor is in your trusted computing base.** You are applying a
+   third-party patch to the QEMU that contains untrusted code. It is pinned by
+   hash and built under `runtime/`; read it before changing the pin.
+10. **Passwordless guest.** The Linux user has an empty password and passwordless
+    `sudo`. This is an isolated analysis VM, not a workstation model.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `QEMU not found` / `NOT patched` | `sudo ./bootstrap.sh`, then `./bin/svm doctor` |
-| `qemu-img not found` | `sudo apt install qemu-utils` or rerun bootstrap |
-| `OVMF not found` | `sudo apt install ovmf`; check `/usr/share/OVMF` |
-| `no SPICE viewer found` | `sudo apt install virt-viewer`; or use `--headless` |
-| `KVM: permission denied` | `sudo usermod -aG kvm "$USER"`; log out and back in |
-| Guest has no network | Check `systemctl status systemd-networkd`; the NIC is e1000e |
-| WARP will not connect | Check guest clock, UDP 2408, captive portal, registration |
-| Traffic leaks when WARP drops | Keep Lockdown/Always On enabled in the MDM policy |
-| XFCE panel plugin missing | Rebuild the base; `xfce4-power-manager-plugins` is required |
+| `doctor` says "patches/ changed since the build" | `./bootstrap.sh --build` (incremental) |
+| `OVMF not found` | `sudo apt install ovmf` |
+| `no SPICE viewer found` | `sudo apt install virt-viewer` or use `--headless` |
+| `KVM: permission denied` | `sudo usermod -aG kvm "$USER"`, then log in again |
+| Guest has no network | Check `qemu.log`; the NIC is an e1000e |
+| WARP will not connect | Check the guest clock, UDP 2408 and captive portals |
+| Windows probe drive letter | The probe CD is `D:` or `E:`; run `gdr` |
+| Host feels slow while a guest runs | Lower `vcpus` in the profile |
 | Build OOM-killed | `JOBS=4 ./bootstrap.sh --build --force` |
-| Session kept after Ctrl-C | Expected; `svm destroy <id>` or `svm nuke` |
-| Launcher opens nothing | Run `./bin/svm list --json` and `./bin/svm doctor` |
-
-Full build errors are covered in `docs/BUILD.md`.
 
 ## Documentation
 
-- `docs/ARCHITECTURE.md` — session lifecycle, identity model, QEMU device map.
-- `docs/NETWORK.md` — WARP, DNS, leaks, LAN isolation, stronger anonymity.
-- `docs/HARDENING.md` — host hardening, dedicated user, RDTSC/KVM patch.
-- `docs/BUILD.md` — pinned versions, hashes, build troubleshooting.
-- `guest/README.md` — WARP setup and Linux base notes.
+- [`docs/FRESHNESS.md`](docs/FRESHNESS.md): what is new in every session, what is shared, how to verify.
+- [`docs/ANTI-DETECTION.md`](docs/ANTI-DETECTION.md): what the upstream patch does, what this project adds, measured results, residual gaps.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): session lifecycle, identity model, QEMU device map.
+- [`docs/NETWORK.md`](docs/NETWORK.md): WARP, DNS, leaks, LAN exposure.
+- [`docs/HARDENING.md`](docs/HARDENING.md): host hardening, dedicated user, timing patch.
+- [`docs/BUILD.md`](docs/BUILD.md): pinned versions, hashes, build troubleshooting.
+- [`guest/README.md`](guest/README.md): guest setup and probes.
 
 ## Credits
 
-- [`zhaodice/qemu-anti-detection`](https://github.com/zhaodice/qemu-anti-detection) — QEMU patch set (GPL-2.0).
-- [`WCharacter/RDTSC-KVM-Handler`](https://github.com/WCharacter/RDTSC-KVM-Handler) — KVM RDTSC research.
+- [`zhaodice/qemu-anti-detection`](https://github.com/zhaodice/qemu-anti-detection): QEMU patch set (GPL-2.0).
+- [`WCharacter/RDTSC-KVM-Handler`](https://github.com/WCharacter/RDTSC-KVM-Handler): KVM RDTSC research.
 - QEMU, OVMF, virt-viewer, Cloudflare WARP.

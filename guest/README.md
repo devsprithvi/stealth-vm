@@ -1,55 +1,49 @@
 # Guest setup
 
-Everything here is installed **inside the base image**, once. Sessions clone the
-base, so they inherit the WARP client and its registration.
+The bases are shared, read-only templates. Nothing is registered or logged in
+inside them, so every session starts as a machine nobody has used. Anything a
+session needs to identify itself to an online service (WARP) is created at that
+session's first boot and thrown away with the session.
 
 ## Windows base
 
-1. Boot the base installer:
+One command builds it, unattended, from the installer ISO. No click is needed
+and no user ever signs in:
 
-   ```bash
-   ./bin/svm base create win10 --iso images/iso/Win10_22H2_English_x64.iso
-   ```
+```bash
+./scripts/build-win10-base.sh            # about 30-40 minutes, 4 GiB guest
+```
 
-2. Install Windows normally. The disk is AHCI and the NIC is an Intel e1000e,
-   both of which Windows 10 has inbox drivers for. You do not need virtio
-   drivers to install or to get networking.
+What it does (sources in `guest/windows/`):
 
-3. Inside Windows, open PowerShell as Administrator and run:
+1. Packs `autounattend.xml`, `build-base.ps1`, `first-logon.ps1`,
+   `session-unattend.xml` and the Cloudflare WARP MSI into `images/iso/win10-build.iso`.
+2. Moves the current base into `images/base/backup/` (never deletes it).
+3. `svm base create win10` installs Windows 10 Pro, reseals into **Audit mode**
+   as the built-in Administrator (no user profile is ever created), runs
+   `build-base.ps1`, which stages the per-session files, turns hibernation off
+   and clears logs, then runs `sysprep /generalize /oobe /shutdown`.
+4. The finished base is mounted read-only-style and checked: sysprep succeeded,
+   no `hiberfil.sys`, no Cloudflare data, no `Users\user`. Build logs are removed.
 
-   ```powershell
-   Set-ExecutionPolicy -Scope Process Bypass -Force
-   .\warp-setup.ps1
-   ```
+Each session then boots an overlay of that generalized image, so Windows runs
+specialize + OOBE with `session-unattend.xml`: new SID, MachineGuid, computer
+name, SQM and telemetry ids, and a new `user` profile. `first-logon.ps1`
+replaces the hardware-profile GUID and re-creates the network adapter (new
+interface GUID), turns IPv6 off, installs WARP from the staged MSI, registers a
+new free WARP device and connects. It then deletes the MSI and itself.
 
-   Or install Cloudflare WARP manually from
-   <https://1.1.1.1/> and skip the script.
+First boot of a session takes about 6 minutes (specialize, OOBE, WARP). The
+network adapter is removed and re-detected during that time, so it is normal
+for the connection to drop briefly.
 
-4. Open WARP, log in, connect, then enable **Lockdown mode** (also called
-   **Always On** in some versions). Lockdown makes the client fail closed: if
-   WARP drops, the guest has no direct internet.
+Do **not** boot the base to "finish setup", install software, or register WARP
+in it. Anything done there is shared by every future session. To change what
+the base contains, edit `guest/windows/` and rebuild.
 
-5. Disable IPv6 on the guest NIC so a WARP failure cannot leak over IPv6:
-
-   ```powershell
-   Get-NetAdapter | Disable-NetAdapterBinding -ComponentID ms_tcpip6
-   ```
-
-6. Display driver: the anti-detection patch rewrites the QXL PCI vendor ID
-   from Red Hat (`1b36`) to Intel (`8086`), so the stock Red Hat QXL WDDM
-   driver will not bind. Windows falls back to the Microsoft Basic Display
-   Adapter, which is usable but limited to a low resolution. The `virtio-win`
-   ISO is for virtio devices and does not contain a QXL driver. If you need
-   higher resolution, use a custom QXL INF that matches the patched IDs, or
-   accept the basic driver. This is a deliberate stealth/compatibility
-   tradeoff, not a driver-installation mistake.
-
-7. Shut Windows down from the Start menu. QEMU exits, and `svm base create`
-   asks **"Installation in 'win10' finished. Seal this base?"** Answer yes.
-   Do not close the SPICE window to "finish" the install; that also stops QEMU,
-   but a clean guest shutdown is better for the filesystem. If you pass
-   `--yes`, the base is sealed as soon as QEMU exits, so only use it after you
-   have verified the install and WARP.
+The QXL card keeps its Red Hat ID (`1b36:0100`) and no QXL driver is installed,
+so Windows uses the Microsoft Basic Display Adapter at 1280x800. This is the
+main remaining hardware tell; see `docs/ANTI-DETECTION.md`.
 
 ## Linux base
 
@@ -91,6 +85,27 @@ Then inside the guest run `sudo ./warp-setup.sh`, connect WARP, enable
 Lockdown/Always On, disable IPv6, and shut the guest down cleanly so `svm` can
 seal the base.
 
+## Stealth probes
+
+`stealth-probe.ps1` (Windows) and `stealth-probe.sh` (Linux) report what code
+inside the guest can learn about the VM and mark each giveaway `[TELL]`. They
+change nothing. Deliver them on a read-only CD so no folder is shared:
+
+```bash
+xorriso -as mkisofs -V PROBE -J -r -o /tmp/probe.iso guest/
+./bin/svm run --fresh --profile win10 --keep --cdrom /tmp/probe.iso
+```
+
+- Windows: `powershell -ep bypass -f D:\stealth-probe.ps1` (the CD can be `D:`
+  or `E:`; list drives with `gdr`). Use `svm paste` to type the command.
+- Linux: `sudo mount /dev/sr0 /mnt && sudo bash /mnt/stealth-probe.sh`.
+- Isolation: run `python3 -m http.server 9999 --bind 127.0.0.1` on the host and
+  pass `-HostPort 9999` / `--host-port 9999`. The port must be unreachable.
+
+Run a probe after every QEMU rebuild, base rebuild, or change to
+`config/hardware.toml`. Interpreting the output is covered in
+`docs/ANTI-DETECTION.md`.
+
 ## Verify WARP
 
 Inside the guest:
@@ -103,9 +118,9 @@ Look for `warp=on` and a `ip=` that is a Cloudflare address, not your home IP.
 
 ## Notes
 
-- **Register WARP once, in the base.** Clones inherit the registration. Run one
-  stealth VM at a time; two clones sharing one WARP device registration can
-  confuse the client and Cloudflare.
+- **WARP is registered per session, never in a base.** Windows does it in
+  `first-logon.ps1`, Linux in `warp-auto-connect`. Two sessions therefore have
+  two different Cloudflare device registrations and can run side by side.
 - **WARP is not anonymity.** Cloudflare sees your host's public IP and the
   device registration. It hides your IP from the destinations you visit, not
   from Cloudflare.

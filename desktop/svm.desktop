@@ -2,10 +2,23 @@
 Type=Application
 Version=1.0
 Name=Stealth VM
-Comment=Open the persistent stealth Linux VM
-Exec=@ROOT@/bin/svm-gui
+Comment=Start a brand-new disposable machine (Linux)
+Exec=@ROOT@/bin/svm-gui --profile linux
 Icon=computer
 Terminal=false
 Categories=System;Emulator;
-Keywords=vm;qemu;linux;stealth;
+Keywords=vm;qemu;linux;stealth;sandbox;
 StartupNotify=true
+Actions=windows;keep;resume;
+
+[Desktop Action windows]
+Name=New Windows 10 machine
+Exec=@ROOT@/bin/svm-gui --profile win10
+
+[Desktop Action keep]
+Name=New Linux machine (keep after closing)
+Exec=@ROOT@/bin/svm-gui --profile linux --keep
+
+[Desktop Action resume]
+Name=Resume last kept Linux machine
+Exec=@ROOT@/bin/svm-gui --profile linux --resume

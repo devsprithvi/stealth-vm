@@ -21,10 +21,13 @@ local build is missing, and `svm doctor` warns when it is unpatched.
 The patch URL is pinned to the commit, not `main`, so the downloaded bytes are
 reproducible even if upstream changes. The SHA-256 check is still authoritative.
 
-The anti-detection patch and both local patches were verified against a clean
-QEMU 10.2.2 tree with `patch -p1 --dry-run` (exit 0), in order: anti-detection,
-local chassis, local memory. The build script repeats each dry run before
-applying it for real.
+The anti-detection patch and the four local patches in `patches/` apply to a
+clean QEMU 10.2.2 tree in filename order. The build script runs a
+`patch -p1 --dry-run` before applying each one for real and tracks applied
+patches with `.svm-applied-*` marker files in the source tree. Re-running the
+script is incremental: it exits early only when the hash of `patches/*.patch`
+recorded in `runtime/qemu/BUILD_INFO` matches, and otherwise applies the new
+patches and runs `make` on what changed. `svm doctor` reports a stale build.
 
 ## Requirements
 
@@ -32,8 +35,8 @@ applying it for real.
 - `sudo` for the one-time dependency install.
 - ~10 GiB free disk: tarball, source, build objects, and installed prefix.
 - 15-40 minutes on a 6-core/12-thread desktop; less on a faster machine.
-- An Ubuntu 24.04.5 installer ISO for the Linux base. Windows ISOs are
-  optional; the Windows profiles are deferred.
+- An Ubuntu 24.04.5 installer ISO for the Linux base and a Windows 10 ISO for
+  the Windows base.
 
 The host in this project is Ubuntu 26.04, kernel 7.0, Ryzen 5 4500, ~15 GiB
 RAM. The build script caps parallelism at 8 jobs to avoid OOM; override with
@@ -199,7 +202,7 @@ vendor/device IDs, and device strings. It replaces Red Hat PCI IDs with Intel
 IDs and hardcodes ASUS strings. It is applied to the QEMU source, so the
 resulting binary is self-contained; no runtime patch or LD_PRELOAD is involved.
 
-Two small local patches are applied after it:
+Four local patches are applied after it (details in `ANTI-DETECTION.md`):
 
 - `0001-smbios-desktop-chassis.patch` — QEMU hardcodes SMBIOS chassis type 1
   ("Other") and zero power cords; the patch makes type 3 report "Desktop" with
@@ -209,7 +212,13 @@ Two small local patches are applied after it:
   synchronous, 64-bit widths and 1.2 V, matching the DDR4 kits in
   `hardware.toml`.
 
-Both are small, reviewed, and applied with a `--dry-run` first.
+- `0003-acpi-ami-oem.patch` — ACPI OEM IDs become `ALASKA` / `A M I`, as on a
+  real AMI board, instead of `INTEL` / `PC8086`.
+- `0004-malware-analysis-hardening.patch` — blocks guest access to host
+  loopback through the slirp gateway, stops emitting the hypervisor-only WAET
+  ACPI table, and makes the optical drive report its configured model.
+
+All are small, reviewed, and applied with a `--dry-run` first.
 
 The build records what was built:
 

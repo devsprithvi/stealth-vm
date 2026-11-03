@@ -65,9 +65,13 @@ directory; deleting the directory is the cleanup.
 | Config | `src/svm/config.py` | TOML merge, path discovery, OVMF lookup |
 | Identity | `src/svm/identity.py` | Self-consistent SMBIOS/CPU/RAM/disk/MAC identity |
 | State | `src/svm/state.py` | Sessions, overlays, bases, stop/destroy, QMP |
+| SMBIOS tables | `src/svm/smbios_tables.py` | Binary SMBIOS types 4, 7, 16, 17 that `-smbios` options cannot express |
+| Keystrokes | `src/svm/paste.py` | Host text typed into the guest as emulated PS/2 key events (`svm paste`) |
 | QEMU rendering | `src/svm/qemu.py` | `hardware.cfg`, command line, viewer, patch check |
 | Defaults | `config/defaults.toml` | Global resources, display, network, hardware |
-| Pools | `config/hardware.toml` | CPU, board, RAM, disk, MAC identities |
+| Pools | `config/hardware.toml` | CPU (with cache sizes), board, RAM, disk, MAC identities (OUIs checked against IEEE) |
+| QEMU patches | `patches/*.patch` | Local fixes applied after the upstream anti-detection patch; see `ANTI-DETECTION.md` |
+| Probes | `guest/stealth-probe.ps1`, `guest/stealth-probe.sh` | Read-only reports of what the guest can detect |
 | Profiles | `config/profiles/*.toml` | Per-use-case overrides |
 | Build | `scripts/build-qemu.sh` | Pinned QEMU + patch build into `runtime/qemu` |
 | Bootstrap | `bootstrap.sh` | One-time apt dependencies, then build as the desktop user |
@@ -89,7 +93,7 @@ stealth-vm/
 ├── images/
 │   ├── iso/                  installer ISOs (not wiped)
 │   └── base/                 sealed bases: .qcow2, .vars.fd, .json, .tpm/
-├── vms/                      per-session overlays (persistent until destroyed)
+├── vms/                      per-session overlays (deleted on exit unless --keep)
 ├── runtime/qemu/             patched build; never installed over distro QEMU
 ├── build/                    downloads and unpacked source
 └── logs/
@@ -152,10 +156,11 @@ exits, `svm` asks the guest to power down via QMP, then stops QEMU if needed.
 
 ### 5. Shutdown and cleanup
 
-On a clean exit, the profile's `general.auto_destroy` decides what happens. The
-Linux profile sets `auto_destroy = false`, so the overlay, NVRAM, identity,
-Firefox profile, and WARP registration remain for the next `svm run <id>`. A
-profile with `auto_destroy = true`, or any run with `--ephemeral`, runs:
+On a clean exit, the profile's `general.auto_destroy` decides what happens. It
+defaults to `true` for every profile, so the session is deleted. With
+`--keep`, the overlay, NVRAM, identity and WARP registration remain for the
+next `svm run <id>`. When the session is deleted (the default, or
+`--ephemeral`), this runs:
 
 ```text
 stop_session()  -> QMP system_powerdown, wait, QMP quit, SIGTERM, SIGKILL
@@ -217,7 +222,9 @@ generator (QEMU 10.2.2 has no `size` option for type 17).
 The CPUID leaf 1 family/model/stepping is overridden to match type 4, the brand
 string is replaced with `model-id`, the hypervisor bit is cleared
 (`hypervisor=off`), the KVM signature is hidden (`kvm=off`), and the VMware
-timing leaf is disabled (`vmware-cpuid-freq=false`).
+timing leaf is disabled (`vmware-cpuid-freq=false`). `host-cache-info=on` makes
+the CPUID cache leaves report the host's real cache sizes; QEMU's default is a
+16 MiB L3 that matches neither the advertised CPU nor any real Ryzen 5.
 
 ## Hardware model
 
@@ -259,7 +266,7 @@ Key flags, in order:
 -machine q35,accel=kvm,kernel_irqchip=on,vmport=off,usb=off[,smm=on]
 -cpu host,family=...,model=...,stepping=...,model-id=...,
      kvm=off,hypervisor=off,vmware-cpuid-freq=false,enforce=false,
-     host-phys-bits=true,topoext=on
+     host-phys-bits=true,topoext=on,host-cache-info=on
 -smp <threads>,sockets=1,cores=<cores>,threads=<threads/cores>
 -m <memory_mb>M
 -uuid <uuid>

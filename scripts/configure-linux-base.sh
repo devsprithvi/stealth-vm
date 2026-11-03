@@ -108,7 +108,9 @@ apt-get purge -y \
 apt-get purge -y \
     apport apport-core-dump-handler landscape-common open-iscsi pollinate \
     sosreport ubuntu-pro-client ubuntu-pro-client-l10n \
-    update-manager-core update-notifier-common 2>/dev/null || true
+    update-manager-core update-notifier-common \
+    ubuntu-release-upgrader-core ubuntu-release-upgrader-gtk \
+    update-manager update-notifier gnome-initial-setup 2>/dev/null || true
 apt-get autoremove -y --purge
 rm -rf /etc/cloud /var/lib/cloud /var/log/cloud-init* /var/log/installer \
     /etc/subiquity /var/lib/subiquity /var/log/curtin* /var/log/ubuntu-advantage* \

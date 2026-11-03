@@ -111,9 +111,9 @@ def _serial(prefix: str = "", length: int = 8) -> str:
 
 def _mac(oui: str) -> str:
     parts = oui.split(":")
+    # The OUI (first three octets) comes from the pool and is already unicast
+    # and globally administered; only the device-specific tail is random.
     tail = [secrets.randbelow(256) for _ in range(3)]
-    # Keep the unicast / globally-administered bits correct.
-    tail[0] &= 0xFE
     return ":".join([p.upper() for p in parts] + [f"{b:02X}" for b in tail])
 
 
@@ -169,7 +169,10 @@ def generate_identity(
     chassis_serial = _serial(length=10)
     cpu_serial = _serial(length=10)
     memory_serial = _serial(length=10)
-    disk_serial = _serial(prefix=str(disk["serial_prefix"]), length=8)
+    # Real Samsung and WD SATA serials are 15 characters; pad the pool's
+    # model-specific prefix to that length instead of a fixed 8-char tail.
+    disk_prefix = str(disk["serial_prefix"])
+    disk_serial = _serial(prefix=disk_prefix, length=max(4, 15 - len(disk_prefix)))
 
     identity: dict[str, Any] = {
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -186,8 +189,15 @@ def generate_identity(
             "stepping": int(cpu["stepping"]),
             "cores": int(cpu["cores"]),
             "threads": int(cpu["threads"]),
+            "base_speed": int(cpu.get("base_speed", cpu["max_speed"])),
             "max_speed": int(cpu["max_speed"]),
             "processor_family": int(cpu["processor_family"]),
+            "processor_upgrade": int(cpu.get("processor_upgrade", 0x01)),
+            "external_clock": int(cpu.get("external_clock", 100)),
+            "voltage": int(cpu.get("voltage", 0x8C)),
+            "l1_cache_kb": int(cpu.get("l1_cache_kb", int(cpu["cores"]) * 64)),
+            "l2_cache_kb": int(cpu.get("l2_cache_kb", int(cpu["cores"]) * 512)),
+            "l3_cache_kb": int(cpu.get("l3_cache_kb", 8192)),
         },
         "board": {
             "manufacturer": board["manufacturer"],
@@ -242,26 +252,6 @@ def generate_identity(
                 "asset": "Default string",
                 "sku": board["sku"],
             },
-            "4": {
-                "sock_pfx": pool["socket"],
-                "manufacturer": pool["cpu_manufacturer"],
-                "version": cpu["name"],
-                "serial": cpu_serial,
-                "asset": "Not Specified",
-                "part": cpu["name"],
-                "max-speed": str(cpu["max_speed"]),
-                "current-speed": str(cpu["max_speed"]),
-                "processor-family": str(cpu["processor_family"]),
-            },
-            "17": {
-                "loc_pfx": "DIMM",
-                "bank": "BANK 0",
-                "manufacturer": memory["manufacturer"],
-                "serial": memory_serial,
-                "asset": "Not Specified",
-                "part": memory["part"],
-                "speed": str(memory["speed"]),
-            },
         },
     }
     return identity
@@ -271,10 +261,13 @@ def smbios_args(identity: dict[str, Any]) -> list[str]:
     """Render the identity as a list of -smbios arguments.
 
     QEMU's -smbios parser is comma-separated, so commas inside values would
-    split the option. The -uuid flag already carries the system UUID.
+    split the option. The -uuid flag already carries the system UUID.  Types 4,
+    7, 16 and 17 are supplied as binary structures by smbios_tables.py instead.
     """
     args: list[str] = []
     for smbios_type, fields in identity["smbios"].items():
+        if smbios_type in {"4", "7", "16", "17"}:
+            continue
         value = f"type={smbios_type}"
         for key, field_value in fields.items():
             if smbios_type == "1" and key == "uuid":

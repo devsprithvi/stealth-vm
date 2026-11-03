@@ -21,11 +21,13 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
+from .diskids import DiskIdError, randomize_overlay_ids
 from .identity import generate_identity
+from .smbios_tables import write_tables
 
 
 class StateError(RuntimeError):
-    pass
+    """A user-facing failure (missing base, bad name, running session, ...)."""
 
 
 def _now() -> str:
@@ -44,6 +46,17 @@ def _qemu_img(cfg: Config, args: list[str]) -> None:
         raise StateError(
             f"qemu-img {' '.join(args)} failed:\n{result.stderr.strip() or result.stdout.strip()}"
         )
+
+
+def _qemu_nbd(cfg: Config) -> Path:
+    if cfg.paths.qemu_img is not None:
+        sibling = cfg.paths.qemu_img.with_name("qemu-nbd")
+        if sibling.is_file():
+            return sibling
+    found = shutil.which("qemu-nbd")
+    if found is None:
+        raise StateError("qemu-nbd not found. Run: sudo ./bootstrap.sh")
+    return Path(found)
 
 
 def new_session_id() -> str:
@@ -65,6 +78,13 @@ def _safe_component(value: str, what: str) -> str:
 
 @dataclass
 class Session:
+    """One VM instance: its directory plus the parsed ``session.json``.
+
+    ``kind`` is ``"run"`` for a normal overlay session and ``"install"`` for the
+    transient session that writes straight into a base disk during
+    ``svm base create``.
+    """
+
     dir: Path
     data: dict[str, Any]
 
@@ -83,6 +103,10 @@ class Session:
     @property
     def hw_config(self) -> Path:
         return Path(self.data["paths"]["hw_config"])
+
+    @property
+    def smbios_dir(self) -> Path:
+        return Path(self.data["paths"]["smbios"])
 
     @property
     def spice(self) -> Path:
@@ -180,6 +204,7 @@ def _paths_for(cfg: Config, session_id: str) -> dict[str, str]:
         "disk": str(directory / "disk.qcow2"),
         "vars": str(directory / "vars.fd"),
         "hw_config": str(directory / "hardware.cfg"),
+        "smbios": str(directory / "smbios"),
         "spice": str(directory / "spice.sock"),
         "qmp": str(directory / "qmp.sock"),
         "pid": str(directory / "qemu.pid"),
@@ -188,18 +213,37 @@ def _paths_for(cfg: Config, session_id: str) -> dict[str, str]:
     }
 
 
-def _resources(profile: dict[str, Any]) -> tuple[int, int, int]:
+def _resources(
+    profile: dict[str, Any],
+    *,
+    vcpus: int | None = None,
+    memory_mb: int | None = None,
+) -> tuple[int, int, int]:
     """Return (vcpus, memory_mb, disk_gb).
 
     disk_gb is decimal GB, matching the labelled capacity of the emulated
     SSD. The guest sees ~465.7 GiB for a 500 GB disk, exactly like hardware.
+    ``vcpus`` and ``memory_mb`` override the profile for this session only
+    (for example a smaller guest on a tight host); both must still match an
+    entry in config/hardware.toml.
     """
     resources = profile.get("resources", {})
     return (
-        int(resources.get("vcpus", 8)),
-        int(resources.get("memory_mb", 8192)),
+        int(vcpus or resources.get("vcpus", 8)),
+        int(memory_mb or resources.get("memory_mb", 8192)),
         int(resources.get("disk_gb", 500)),
     )
+
+
+def _resource_overrides(
+    vcpus: int | None, memory_mb: int | None
+) -> dict[str, int]:
+    overrides: dict[str, int] = {}
+    if vcpus:
+        overrides["vcpus"] = int(vcpus)
+    if memory_mb:
+        overrides["memory_mb"] = int(memory_mb)
+    return overrides
 
 
 def new_session(
@@ -208,7 +252,15 @@ def new_session(
     base_name: str,
     *,
     dry_run: bool = False,
+    vcpus: int | None = None,
+    memory_mb: int | None = None,
 ) -> Session:
+    """Create a session: overlay on the sealed base plus a fresh identity.
+
+    The profile's OS, Secure Boot and TPM settings must match the base, because
+    the overlay inherits the base's firmware state. ``dry_run`` plans the
+    identity without writing anything.
+    """
     profile = cfg.profile(profile_name)
     base = load_base(cfg, base_name)
     profile_os = str(profile.get("os", "windows"))
@@ -234,7 +286,7 @@ def new_session(
     session_id = new_session_id()
     directory = cfg.paths.vms / session_id
     paths = _paths_for(cfg, session_id)
-    vcpus, memory_mb, disk_gb = _resources(profile)
+    vcpus, memory_mb, disk_gb = _resources(profile, vcpus=vcpus, memory_mb=memory_mb)
     # The overlay inherits the base disk's virtual size. Use that size for the
     # identity so the guest's reported capacity cannot disagree with reality.
     disk_gb = int(base.get("size_gb", disk_gb))
@@ -256,6 +308,9 @@ def new_session(
         "identity": identity,
         "paths": paths,
     }
+    overrides = _resource_overrides(vcpus, memory_mb)
+    if overrides:
+        data["resources"] = overrides
     session = Session(directory, data)
     if dry_run:
         return session
@@ -276,10 +331,19 @@ def new_session(
                 paths["disk"],
             ],
         )
+        if profile_os == "windows":
+            # The NTFS volume serial is a common machine identifier; give the
+            # overlay its own before the guest ever boots.
+            nbd = _qemu_nbd(cfg)
+            try:
+                data["disk_ids"] = randomize_overlay_ids(nbd, Path(paths["disk"]))
+            except DiskIdError as exc:
+                raise StateError(f"could not randomize disk identifiers: {exc}") from exc
         shutil.copy2(base["vars"], paths["vars"])
         # copy2 preserves the read-only mode of a sealed base; QEMU must be
         # able to write the per-session NVRAM.
         os.chmod(paths["vars"], 0o600)
+        write_tables(Path(paths["smbios"]), identity)
         tpm_source = base.get("tpm")
         if tpm_source and Path(tpm_source).is_dir():
             shutil.copytree(tpm_source, paths["tpm"])
@@ -299,8 +363,14 @@ def new_install_session(
     *,
     tpm_dir: Path | None = None,
     disk_gb: int | None = None,
+    vcpus: int | None = None,
+    memory_mb: int | None = None,
 ) -> Session:
-    """A transient session that writes directly to a base disk."""
+    """A transient session that writes directly to a base disk.
+
+    Used only while installing an OS; the sealed base is then read-only and
+    all later sessions are overlays.
+    """
     profile = cfg.profile(profile_name)
     session_id = "_install-" + new_session_id()
     directory = cfg.paths.vms / session_id
@@ -308,7 +378,8 @@ def new_install_session(
     paths["disk"] = str(disk)
     paths["vars"] = str(variables)
     paths["tpm"] = str(tpm_dir) if tpm_dir else ""
-    vcpus, memory_mb, profile_disk_gb = _resources(profile)
+    overrides = _resource_overrides(vcpus, memory_mb)
+    vcpus, memory_mb, profile_disk_gb = _resources(profile, vcpus=vcpus, memory_mb=memory_mb)
     identity = generate_identity(
         cfg.hardware,
         vcpus=vcpus,
@@ -327,8 +398,11 @@ def new_install_session(
         "identity": identity,
         "paths": paths,
     }
+    if overrides:
+        data["resources"] = overrides
     directory.mkdir(parents=True, exist_ok=False)
     os.chmod(directory, 0o700)
+    write_tables(Path(paths["smbios"]), identity)
     session = Session(directory, data)
     session.save()
     return session
@@ -379,6 +453,7 @@ def list_sessions(cfg: Config) -> list[Session]:
 
 
 def qmp_command(sock: Path, command: str, timeout: float = 2.0) -> dict[str, Any]:
+    """Send one argument-less QMP command and return QEMU's reply."""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
         conn.settimeout(timeout)
         conn.connect(str(sock))
@@ -394,6 +469,11 @@ def qmp_command(sock: Path, command: str, timeout: float = 2.0) -> dict[str, Any
 
 
 def stop_session(session: Session, timeout: int = 20) -> None:
+    """Stop QEMU as gently as possible, escalating only when it does not exit.
+
+    ACPI power-down lets the guest flush its filesystem; ``quit`` and then
+    SIGKILL are fallbacks for a hung guest.
+    """
     if not session.is_running():
         return
     pid = session.pid()
@@ -435,6 +515,7 @@ def stop_session(session: Session, timeout: int = 20) -> None:
 
 
 def destroy_session(session: Session, *, force: bool = False) -> None:
+    """Delete the whole session directory (disk, NVRAM, identity, logs)."""
     if session.is_running():
         if not force:
             raise StateError(

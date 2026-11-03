@@ -5,8 +5,9 @@
 # src/svm/. There is no point in a setting that silently does nothing.
 
 [general]
-# Linux is the working profile while the Windows base is deferred.
-default_profile = "linux"
+# Windows is the primary target on this host; the linux profile stays available
+# explicitly. Disposable by default: the session directory is wiped on exit.
+default_profile = "win10"
 auto_destroy = true
 viewer = "remote-viewer"
 

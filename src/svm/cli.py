@@ -1,3 +1,11 @@
+"""svm command line: sessions, base images and host checks.
+
+A *base* is an OS installed once and then sealed read-only. A *session* is a
+qcow2 overlay on a base plus a freshly generated hardware identity, so every
+run looks like a different physical PC while nothing is ever written to the
+base. Sessions are disposable (``svm destroy``) or kept across restarts.
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,7 +13,9 @@ import os
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +32,7 @@ from .config import Config, ensure_dirs, load_config
 from .identity import summary_rows
 from .qemu import (
     build_command,
+    build_is_current,
     is_patched,
     qemu_version,
     render_hardware_config,
@@ -61,6 +72,9 @@ base_app = typer.Typer(
 app.add_typer(base_app, name="base")
 
 console = Console()
+
+_VCPUS_HELP = "vCPU count for this session only (must match a CPU in hardware.toml)."
+_MEMORY_HELP = "RAM in MiB for this session only (must match a DIMM in hardware.toml)."
 
 
 def _fail(message: str, code: int = 1) -> None:
@@ -191,6 +205,29 @@ def _wipe_session(session) -> None:
     destroy_session(session, force=True)
 
 
+def _press_key_for_cd_boot(qmp_sock: Path) -> None:
+    """Tap space a few times so "Press any key to boot from CD" is answered."""
+    time.sleep(2.0)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(5.0)
+            conn.connect(str(qmp_sock))
+            stream = conn.makefile("rwb")
+            stream.readline()  # QMP greeting
+            conn.sendall(b'{"execute":"qmp_capabilities"}\n')
+            stream.readline()
+            for _ in range(4):
+                conn.sendall(
+                    b'{"execute":"send-key","arguments":'
+                    b'{"keys":[{"type":"qcode","data":"spc"}]}}\n'
+                )
+                stream.readline()
+                time.sleep(0.4)
+    except OSError:
+        # QEMU not up yet or already gone; the installer boots without it.
+        pass
+
+
 def _run_qemu(
     cfg: Config,
     session,
@@ -234,25 +271,11 @@ def _run_qemu(
     session.save()
 
     if install_iso is not None:
-        def _auto_press_cd_key():
-            time.sleep(2.0)
-            try:
-                import socket
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-                    conn.settimeout(5.0)
-                    conn.connect(str(session.qmp))
-                    f = conn.makefile("rwb")
-                    f.readline()
-                    conn.sendall(b'{"execute":"qmp_capabilities"}\n')
-                    f.readline()
-                    for _ in range(4):
-                        conn.sendall(b'{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"spc"}]}}\n')
-                        f.readline()
-                        time.sleep(0.4)
-            except Exception:
-                pass
-        import threading
-        threading.Thread(target=_auto_press_cd_key, daemon=True).start()
+        # The Windows installer shows "Press any key to boot from CD" for a
+        # few seconds; answer it so unattended installs do not fall through.
+        threading.Thread(
+            target=_press_key_for_cd_boot, args=(session.qmp,), daemon=True
+        ).start()
 
     viewer_process: Optional[subprocess.Popen] = None
     started = True
@@ -336,6 +359,14 @@ def doctor() -> None:
         )
         if not local and not patched:
             row("patched build", False, "system QEMU only; stealth patches inactive")
+        if local and patched:
+            current = build_is_current(cfg)
+            row(
+                "patch set",
+                current,
+                "binary matches patches/" if current else "patches/ changed since the build; run: ./bootstrap.sh --build",
+                warn=not current,
+            )
 
     row(
         "qemu-img",
@@ -457,6 +488,8 @@ def new(
     profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name."),
     base: Optional[str] = typer.Option(None, "--base", "-b", help="Base image name."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan only; write nothing."),
+    vcpus: Optional[int] = typer.Option(None, "--vcpus", min=1, help=_VCPUS_HELP),
+    memory_mb: Optional[int] = typer.Option(None, "--memory-mb", min=1024, help=_MEMORY_HELP),
 ) -> None:
     """Create a new disposable session (overlay disk + fresh identity)."""
     cfg = _cfg()
@@ -464,7 +497,9 @@ def new(
     try:
         profile_data = cfg.profile(profile_name)
         base_name = _base_name(cfg, profile_name, base)
-        session = new_session(cfg, profile_name, base_name, dry_run=dry_run)
+        session = new_session(
+            cfg, profile_name, base_name, dry_run=dry_run, vcpus=vcpus, memory_mb=memory_mb
+        )
     except (StateError, KeyError, ValueError) as exc:
         _fail(str(exc))
 
@@ -495,6 +530,11 @@ def run(
     viewer: Optional[str] = typer.Option(None, "--viewer", help="Viewer executable."),
     no_sandbox: bool = typer.Option(False, "--no-sandbox", help="Disable QEMU seccomp."),
     debug: bool = typer.Option(False, "--debug", help="Print the command and guest errors."),
+    cdrom: Optional[Path] = typer.Option(
+        None, "--cdrom", help="Attach an ISO as a read-only SATA CD (for probe/tool discs)."
+    ),
+    vcpus: Optional[int] = typer.Option(None, "--vcpus", min=1, help=_VCPUS_HELP),
+    memory_mb: Optional[int] = typer.Option(None, "--memory-mb", min=1024, help=_MEMORY_HELP),
 ) -> None:
     """Boot a session. The profile decides whether it is kept after exit."""
     cfg = _cfg()
@@ -502,7 +542,9 @@ def run(
         if fresh:
             profile_name = profile or cfg.default_profile
             base_name = _base_name(cfg, profile_name, base)
-            session = new_session(cfg, profile_name, base_name, dry_run=dry_run)
+            session = new_session(
+                cfg, profile_name, base_name, dry_run=dry_run, vcpus=vcpus, memory_mb=memory_mb
+            )
         elif session_id:
             session = resolve_session(cfg, session_id)
         else:
@@ -555,6 +597,7 @@ def run(
             no_sandbox=no_sandbox,
             debug=debug,
             viewer_override=viewer,
+            driver_iso=cdrom,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]interrupted[/]")
@@ -809,6 +852,8 @@ def base_create(
         "--yes",
         help="Seal the base without asking after the installer exits.",
     ),
+    vcpus: Optional[int] = typer.Option(None, "--vcpus", min=1, help=_VCPUS_HELP),
+    memory_mb: Optional[int] = typer.Option(None, "--memory-mb", min=1024, help=_MEMORY_HELP),
 ) -> None:
     """Install an OS once into a persistent base image.
 
@@ -897,6 +942,8 @@ def base_create(
             variables,
             tpm_dir=tpm_dir if tpm else None,
             disk_gb=size,
+            vcpus=vcpus,
+            memory_mb=memory_mb,
         )
     except (StateError, ValueError) as exc:
         for path in (disk, variables):
