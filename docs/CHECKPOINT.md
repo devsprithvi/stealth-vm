@@ -74,6 +74,9 @@ and uses the configured model as the ATAPI product (`ASUS DRW-24D5MT`).
 the `qxl` module). Identity, CPU, caches, memory, disk, NIC, optical drive are
 consistent. No hypervisor bit, `systeminfo` message or `systemd-detect-virt`
 result. Host loopback is unreachable. WARP connects. Timing was not tested.
+**Caveat (see section 7):** this only covers what our own probe looks at. A real
+product (an Electron app) flagged both guests, so the claim "only 2 tells" is not
+a measure of what real software sees.
 
 ## 3. Fresh-machine work (done 3 Nov 2026, evening)
 
@@ -142,8 +145,12 @@ Rebuild the base to change them.
 
 ## 5. State of the workspace
 
-- No QEMU or test processes running; `vms/` is empty. Bases `win10` (generalized,
-  sealed) and `linux` (empty keyring removed) are sealed read-only.
+- At the time of writing a Linux session started from the desktop launcher
+  (12 vCPU, 8 GiB, disposable) was running and the host had only ~1.4 GiB free.
+  Check `./bin/svm list` and `free -m` first; close it before booting anything.
+  Disposable sessions are wiped when the viewer closes, including anything the
+  user installed for testing. Bases `win10` (generalized, sealed) and `linux`
+  (empty keyring removed) are sealed read-only.
 - Everything is committed. Removed as obsolete: `images/base/backup/`,
   `images/iso/win10-unattend*`, `guest/warp-setup.ps1`, `guest/gh-setup.ps1`.
 - Dev helpers live outside the repo in `~/.cache/svm-dev/` (screenshot, key
@@ -152,7 +159,80 @@ Rebuild the base to change them.
 
 ## 6. Suggested next steps
 
-1. Re-provision the Linux base (`sudo ./scripts/provision-linux-base.sh`) to get the
-   XFCE desktop without the Ubuntu upgrade prompt (changes the base; user decides).
-2. Optional: run the stealth probes on a fresh Windows session after the rebuild
-   (needs a 4 GiB guest; see section 0).
+Do section 7 first. The Linux base re-provision (XFCE, no upgrade prompt:
+`sudo ./scripts/provision-linux-base.sh`) is optional and changes the base.
+
+## 7. Reality check: first test against real software (user report, 3 Nov 2026)
+
+**What happened.** The user installed Qoder (an Electron AI IDE) in the Windows
+guest and the Linux guest to see whether it treats the account/device as new.
+Their report: it behaved badly and appeared to detect the machine. Their words,
+paraphrased: the guests behave like a real VM, but not like a unique one; a
+simple Electron app already defeats us, and they want everything tested, not
+assumed. **Unknown:** the exact symptom (error text, blocked sign-in, trial
+refused, forced verification?), which account and sign-in method were used, and
+whether it was flagged on both guests or only one. Ask for these first.
+
+**Honest assessment.** The identity layer (SMBIOS, CPU, MAC, serials, SID,
+MachineGuid, volume serial) is solid and verified, but nothing so far was tested
+against a real product, and the probe only checks what we thought to check.
+"Different MachineGuid" is not the same as "looks like a different device".
+
+**Hypotheses, most likely first. Each has a cheap test that separates it from the
+others; do not fix anything before running the tests.**
+
+1. **Network reputation, not VM detection.** Every session exits through
+   Cloudflare WARP. WARP egress IPs are shared and commonly scored as VPN/abuse by
+   account and free-trial systems. Also the guest timezone is fixed (IST,
+   en-US) and will not match the WARP exit country. *Test:* repeat the Qoder
+   sign-in with WARP disconnected (guest NAT, host IP), and with a phone hotspot.
+   If behaviour changes, it is network, not hardware.
+2. **Stable device fingerprint across sessions.** Electron/Chromium exposes
+   canvas, WebGL vendor/renderer, fonts, screen size, `hardwareConcurrency`,
+   `deviceMemory`, audio, locale. These come from the software stack and are
+   identical in every session (same Windows build, no real GPU, same default
+   1280x800 Basic Display resolution, same fonts), so a service can cluster all
+   our sessions as one device even though MachineGuid differs. *Test:* open a
+   fingerprint page in two fresh sessions and compare the hashes.
+3. **Graphics tell.** WebGL/GPU in the guest is "Microsoft Basic Render
+   Driver" or SwiftShader; WMI `Win32_VideoController` shows PCI `VEN_1B36`
+   (Red Hat). Almost certainly visible to any Electron app via
+   `app.getGPUInfo()` or `chrome://gpu`. Fixing needs a real GPU path (the host
+   has one RTX 3060 driving its display and no iGPU, so passthrough is not
+   available) or an ID spoof plus a driver; both are hard. Measure first.
+4. **Timing.** RDTSC/CPUID latency reveals KVM. Not addressed. Less likely for a
+   plain Electron app, but common in anti-abuse SDKs.
+5. **Account-side state.** If the same email/phone/GitHub/Google account was
+   used before, the guest is irrelevant. Confirm a never-used account was tried.
+
+**Cheapest high-value experiment: read what Qoder actually collects.**
+`Qoder-win-x64-user.exe` is a public NSIS installer. On the host, extract it with
+`7z x`, unpack `resources/app.asar` (`npx asar extract`), and grep the JS for
+`machineId`, `node-machine-id`, `systeminformation`, `wmic`, `Win32_`,
+`hypervisor`, `vmware`, `virtualbox`, `qemu`, `getGPUInfo`, `webgl`, `fingerprint`.
+Do the same for the Linux build. This gives facts instead of guesses and needs no
+guest. (The old Qoder install and logs were in the deleted dirty base.)
+
+**Fingerprint harness to build.** One static HTML file (`guest/fingerprint.html`)
+that prints a JSON of navigator, screen, timezone, WebGL vendor/renderer,
+canvas/audio hashes, fonts and `performance` timing, plus a combined hash.
+Deliver via `svm run --cdrom` (read-only, no shared folder), open from `file://`
+in Edge/Firefox. Run it on: the real host browser (control), two Windows sessions,
+two Linux sessions, each with and without WARP. Diff the outputs. The control
+tells us what "real" looks like on this exact hardware.
+
+**Likely fixes, only after the tests say which apply:** per-session screen
+resolution, timezone and locale matched to the WARP exit; a plausible set of
+installed fonts and apps; a different network egress option; canvas/WebGL
+differences (hard in a VM without a GPU). State plainly to the user which items
+cannot be solved without real hardware.
+
+**Working notes for the next chat.**
+- The user wants brutal honesty and wants things tested, not asserted. Report
+  failures first. Do not claim stealth from our own probe alone.
+- Host memory rule still applies. Disposable sessions at the profile default are
+  8 GiB; with a Linux 8 GiB guest running the host fell to ~1.4 GiB free. Use
+  `--vcpus 12 --memory-mb 4096` for tests that must keep the 12-thread CPU
+  identity, and launch kept sessions with `--keep` when evidence must survive.
+- `control_bash_process start` reuses an identical running command; vary the
+  command string to start a second process.
