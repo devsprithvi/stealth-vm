@@ -14,8 +14,6 @@ disk_gb = 500
 audio = true
 xres = 1920
 yres = 1080
-vram_mb = 1024
-surfaces = 2048
 
 [network]
 nic = "e1000e"
